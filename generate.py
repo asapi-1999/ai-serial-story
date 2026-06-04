@@ -21,7 +21,7 @@ data = json.dumps({
 }).encode()
 
 req = urllib.request.Request(
-    "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key="
+    "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key="
     + os.environ["GEMINI_API_KEY"],
     data=data,
     headers={"Content-Type": "application/json"}
