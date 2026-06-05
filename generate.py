@@ -21,15 +21,14 @@ if len(stories) == 0:
         "以下の条件で第1話を書いてください：\n"
         "・独自の世界観とメインキャラクターを設定すること\n"
         "・続きが気になる終わり方にすること\n"
-        "・日本語で800字程度\n"
+        "・日本語で1000字程度\n"
         "・更新日：" + today + "\n\n"
         "以下の形式で出力してください：\n"
         "【タイトル】ここにタイトル\n"
         "【本文】\nここに本文"
     )
 else:
-    recent = stories[-3:]
-    for s in recent:
+    for s in stories:
         context += f"第{s['episode']}話「{s['title']}」\n{s['body']}\n\n"
 
     prompt = (
@@ -42,7 +41,7 @@ else:
         "・登場人物・世界観は前話から引き継ぐこと\n"
         "・前話の終わりから自然につながること\n"
         "・続きが気になる終わり方にすること\n"
-        "・日本語で800字程度\n"
+        "・日本語で1000字程度\n"
         "・更新日：" + today + "\n\n"
         "以下の形式で出力してください：\n"
         "【タイトル】ここにタイトル\n"
@@ -51,7 +50,12 @@ else:
 
 data = json.dumps({
     "contents": [{"parts": [{"text": prompt}]}],
-    "generationConfig": {"maxOutputTokens": 2000}
+    "generationConfig": {
+        "maxOutputTokens": 8000,
+        # gemini-2.5-flash は思考トークンも maxOutputTokens に含むため、
+        # 思考を無効化して本文の出力枠を確保する（無効化しないと数十字で打ち切られる）
+        "thinkingConfig": {"thinkingBudget": 0}
+    }
 }).encode()
 
 req = urllib.request.Request(
@@ -61,7 +65,14 @@ req = urllib.request.Request(
     headers={"Content-Type": "application/json"}
 )
 res = json.loads(urllib.request.urlopen(req).read())
-story = res["candidates"][0]["content"]["parts"][0]["text"]
+cand = res["candidates"][0]
+finish = cand.get("finishReason", "")
+parts = cand.get("content", {}).get("parts")
+if not parts or "text" not in parts[0]:
+    raise SystemExit(f"本文が取得できませんでした（finishReason={finish}）: {res}")
+story = parts[0]["text"]
+if finish == "MAX_TOKENS":
+    raise SystemExit("出力がトークン上限で打ち切られました。maxOutputTokens を増やしてください。")
 
 title_match = re.search(r"【タイトル】(.+)", story)
 body_match  = re.search(r"【本文】([\s\S]+)", story)
