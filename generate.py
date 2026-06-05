@@ -1,20 +1,55 @@
 import urllib.request
-import json, os, datetime, re
+import urllib.error
+import json
+import os
+import datetime
+import re
+import time
+import html
 
-today = datetime.datetime.now(
-    datetime.timezone(datetime.timedelta(hours=9))
-).strftime("%Y年%m月%d日")
+JST = datetime.timezone(datetime.timedelta(hours=9))
+now = datetime.datetime.now(JST)
+today = now.strftime("%Y年%m月%d日")
+today_iso = now.strftime("%Y-%m-%d")
 
-try:
-    with open("stories.json", "r", encoding="utf-8") as f:
-        stories = json.load(f)
-except:
-    stories = []
+# GitHub Pages の公開URL（RSSのリンク用）。Pages の設定に合わせて調整する。
+SITE_URL = "https://asapi-1999.github.io/ai-serial-story/"
 
+
+def load_json(path, default):
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return default
+
+
+stories = load_json("stories.json", [])
+bible = load_json("bible.json", {"world": "", "characters": [], "synopsis": []})
 episode_number = len(stories) + 1
 
-context = ""
-if len(stories) == 0:
+
+def section(tag, text):
+    """【タグ】の中身を次の【…】または末尾まで取り出す。"""
+    m = re.search(r"【" + tag + r"】\s*([\s\S]*?)(?=\n?【|$)", text)
+    return m.group(1).strip() if m else ""
+
+
+def parse_people(text):
+    """1行1人「名前：説明」をパースして辞書のリストに。"""
+    people = []
+    for line in text.splitlines():
+        line = line.strip().lstrip("・-*").strip()
+        if not line or line in ("なし", "無し", "特になし"):
+            continue
+        pair = re.split(r"[：:]", line, maxsplit=1)
+        if len(pair) == 2 and pair[0].strip():
+            people.append({"name": pair[0].strip(), "desc": pair[1].strip()})
+    return people
+
+
+# ----- プロンプト組み立て -----
+if episode_number == 1:
     prompt = (
         "あなたはプロの小説家です。\n"
         "これから長編ファンタジー小説の連載を始めます。\n"
@@ -22,49 +57,84 @@ if len(stories) == 0:
         "・独自の世界観とメインキャラクターを設定すること\n"
         "・続きが気になる終わり方にすること\n"
         "・日本語で1000字程度\n"
+        "・タイトルに「第1話」などの話数は含めないこと\n"
         "・更新日：" + today + "\n\n"
-        "以下の形式で出力してください：\n"
-        "【タイトル】ここにタイトル\n"
-        "【本文】\nここに本文"
+        "以下の形式で、各セクションを必ず出力してください：\n"
+        "【タイトル】ここにタイトル（話数は含めない）\n"
+        "【本文】\nここに本文\n"
+        "【世界観】物語の舞台・設定を2〜3文で要約\n"
+        "【登場人物】1行に1人、「名前：説明」の形式で記載\n"
+        "【今回のあらすじ】この話の内容を1文で要約"
     )
 else:
-    for s in stories:
-        context += f"第{s['episode']}話「{s['title']}」\n{s['body']}\n\n"
+    chars = "\n".join(
+        f"・{p['name']}：{p['desc']}" for p in bible.get("characters", [])
+    ) or "（未設定）"
+    synopsis = "\n".join(bible.get("synopsis", [])) or "（なし）"
+    recent = ""
+    for s in stories[-2:]:
+        recent += f"第{s['episode']}話「{s['title']}」\n{s['body']}\n\n"
 
     prompt = (
-        "あなたはプロの小説家です。\n"
-        "以下はこれまでの連載内容です：\n\n"
-        + context +
+        "あなたはプロの小説家です。連載中のファンタジー小説の続きを書きます。\n\n"
+        "# これまでの設定\n"
+        "## 世界観\n" + (bible.get("world") or "（未設定）") + "\n\n"
+        "## 登場人物\n" + chars + "\n\n"
+        "## あらすじ（各話1行）\n" + synopsis + "\n\n"
+        "# 直近のエピソード（全文）\n" + recent +
         "---\n"
         "上記の続きとなる第" + str(episode_number) + "話を書いてください。\n"
         "以下の条件を守ってください：\n"
-        "・登場人物・世界観は前話から引き継ぐこと\n"
-        "・前話の終わりから自然につながること\n"
+        "・登場人物・世界観は引き継ぐこと\n"
+        "・直近のエピソードの終わりから自然につながること\n"
         "・続きが気になる終わり方にすること\n"
         "・日本語で1000字程度\n"
+        "・タイトルに「第" + str(episode_number) + "話」などの話数は含めないこと\n"
         "・更新日：" + today + "\n\n"
-        "以下の形式で出力してください：\n"
-        "【タイトル】ここにタイトル\n"
-        "【本文】\nここに本文"
+        "以下の形式で、各セクションを必ず出力してください：\n"
+        "【タイトル】ここにタイトル（話数は含めない）\n"
+        "【本文】\nここに本文\n"
+        "【今回のあらすじ】この話の内容を1文で要約\n"
+        "【新登場人物】今回新たに登場した人物を「名前：説明」で記載（いなければ「なし」）"
     )
 
-data = json.dumps({
-    "contents": [{"parts": [{"text": prompt}]}],
-    "generationConfig": {
-        "maxOutputTokens": 8000,
-        # gemini-2.5-flash は思考トークンも maxOutputTokens に含むため、
-        # 思考を無効化して本文の出力枠を確保する（無効化しないと数十字で打ち切られる）
-        "thinkingConfig": {"thinkingBudget": 0}
-    }
-}).encode()
 
-req = urllib.request.Request(
-    "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key="
-    + os.environ["GEMINI_API_KEY"],
-    data=data,
-    headers={"Content-Type": "application/json"}
-)
-res = json.loads(urllib.request.urlopen(req).read())
+# ----- Gemini 呼び出し（リトライ付き・APIキーはヘッダーで送る）-----
+def call_gemini(prompt_text):
+    payload = json.dumps({
+        "contents": [{"parts": [{"text": prompt_text}]}],
+        "generationConfig": {
+            "maxOutputTokens": 8000,
+            # 思考も少しだけ使わせて整合性を上げつつ、本文の出力枠も確保する。
+            # （0にすると思考オフ、-1で動的。打ち切り対策で十分な枠を残すこと）
+            "thinkingConfig": {"thinkingBudget": 2048},
+        },
+    }).encode()
+
+    url = ("https://generativelanguage.googleapis.com/v1beta/"
+           "models/gemini-2.5-flash:generateContent")
+    last_err = None
+    for attempt in range(3):
+        try:
+            req = urllib.request.Request(
+                url,
+                data=payload,
+                headers={
+                    "Content-Type": "application/json",
+                    "x-goog-api-key": os.environ["GEMINI_API_KEY"],
+                },
+            )
+            with urllib.request.urlopen(req, timeout=120) as r:
+                return json.loads(r.read())
+        except urllib.error.URLError as e:
+            last_err = e
+            wait = 5 * (attempt + 1)
+            print(f"API呼び出し失敗（{attempt + 1}/3）: {e} … {wait}秒後に再試行")
+            time.sleep(wait)
+    raise SystemExit(f"API呼び出しに3回失敗しました: {last_err}")
+
+
+res = call_gemini(prompt)
 cand = res["candidates"][0]
 finish = cand.get("finishReason", "")
 parts = cand.get("content", {}).get("parts")
@@ -74,68 +144,74 @@ story = parts[0]["text"]
 if finish == "MAX_TOKENS":
     raise SystemExit("出力がトークン上限で打ち切られました。maxOutputTokens を増やしてください。")
 
-title_match = re.search(r"【タイトル】(.+)", story)
-body_match  = re.search(r"【本文】([\s\S]+)", story)
-title = title_match.group(1).strip() if title_match else f"第{episode_number}話"
-body  = body_match.group(1).strip()  if body_match  else story
 
+# ----- パース -----
+title = section("タイトル", story) or f"第{episode_number}話"
+# モデルが「第N話「…」」のように話数を付けた場合は除去する。
+title = re.sub(r"^第?\s*\d+\s*話[「『：:\s]*", "", title).strip().strip("「」『』").strip()
+if not title:
+    title = f"第{episode_number}話"
+
+body = section("本文", story) or story.strip()
+summary = section("今回のあらすじ", story) or title
+
+# ----- ストーリーバイブル更新 -----
+if episode_number == 1:
+    bible["world"] = section("世界観", story)
+    bible["characters"] = parse_people(section("登場人物", story))
+else:
+    existing = {p["name"] for p in bible.get("characters", [])}
+    for p in parse_people(section("新登場人物", story)):
+        if p["name"] not in existing:
+            bible.setdefault("characters", []).append(p)
+            existing.add(p["name"])
+
+bible.setdefault("synopsis", []).append(
+    f"第{episode_number}話「{title}」：{summary}"
+)
+
+# ----- 保存 -----
 stories.append({
     "episode": episode_number,
     "title": title,
     "date": today,
-    "body": body
+    "iso": today_iso,
+    "body": body,
 })
 
 with open("stories.json", "w", encoding="utf-8") as f:
     json.dump(stories, f, ensure_ascii=False, indent=2)
 
-archive_html = ""
+with open("bible.json", "w", encoding="utf-8") as f:
+    json.dump(bible, f, ensure_ascii=False, indent=2)
+
+# ----- RSS生成 -----
+items = ""
 for s in reversed(stories):
-    archive_html += f"""
-    <details>
-      <summary>第{s['episode']}話｜{s['title']}（{s['date']}）</summary>
-      <div class="past-body">{s['body']}</div>
-    </details>"""
+    iso = s.get("iso") or today_iso
+    pub = (datetime.datetime.strptime(iso, "%Y-%m-%d")
+           .replace(tzinfo=JST)
+           .strftime("%a, %d %b %Y %H:%M:%S +0900"))
+    items += f"""
+    <item>
+      <title>第{s['episode']}話 {html.escape(s['title'])}</title>
+      <link>{SITE_URL}#ep{s['episode']}</link>
+      <guid isPermaLink="false">ep-{s['episode']}</guid>
+      <pubDate>{pub}</pubDate>
+      <description>{html.escape(s['body'])}</description>
+    </item>"""
 
-html = """<!DOCTYPE html>
-<html lang="ja">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>AI連載物語</title>
-  <style>
-    body {
-      font-family: 'Hiragino Sans', 'Noto Sans JP', sans-serif;
-      max-width: 680px;
-      margin: 0 auto;
-      padding: 30px 20px;
-      line-height: 2.0;
-      color: #2c2c2c;
-      background: #fdf9f3;
-    }
-    h1 { font-size: 1.4em; border-bottom: 2px solid #c8a96e; padding-bottom: 10px; color: #5a3e1b; }
-    .episode { color: #c8a96e; font-size: 0.9em; margin-bottom: 4px; }
-    .date { color: #999; font-size: 0.85em; margin-bottom: 24px; }
-    .story { white-space: pre-wrap; font-size: 1.05em; background: #fff; padding: 24px; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.06); }
-    .archive { margin-top: 40px; }
-    details { margin-top: 12px; background: #fff; border-radius: 6px; padding: 12px 16px; box-shadow: 0 1px 4px rgba(0,0,0,0.05); }
-    summary { cursor: pointer; font-weight: bold; color: #5a3e1b; }
-    .past-body { white-space: pre-wrap; margin-top: 12px; font-size: 0.95em; }
-  </style>
-</head>
-<body>
-  <p class="episode">第""" + str(episode_number) + """話</p>
-  <h1>📖 """ + title + """</h1>
-  <p class="date">📅 更新日：""" + today + """</p>
-  <div class="story">""" + body + """</div>
+rss = f"""<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>AI連載物語</title>
+    <link>{SITE_URL}</link>
+    <description>AIが毎週月曜に連載するファンタジー小説</description>
+    <language>ja</language>{items}
+  </channel>
+</rss>"""
 
-  <div class="archive">
-    <h2 style="font-size:1.1em; color:#5a3e1b;">📚 バックナンバー</h2>""" + archive_html + """
-  </div>
-</body>
-</html>"""
+with open("rss.xml", "w", encoding="utf-8") as f:
+    f.write(rss)
 
-with open("index.html", "w", encoding="utf-8") as f:
-    f.write(html)
-
-print(f"完了：第{episode_number}話「{title}」")
+print(f"完了：第{episode_number}話「{title}」（{len(body)}字）")

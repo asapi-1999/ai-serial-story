@@ -4,6 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>AI連載物語</title>
+  <link rel="alternate" type="application/rss+xml" title="AI連載物語" href="rss.xml">
   <style>
     body {
       font-family: 'Hiragino Sans', 'Noto Sans JP', sans-serif;
@@ -19,30 +20,63 @@
     .date { color: #999; font-size: 0.85em; margin-bottom: 24px; }
     .story { white-space: pre-wrap; font-size: 1.05em; background: #fff; padding: 24px; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.06); }
     .archive { margin-top: 40px; }
+    .archive h2 { font-size: 1.1em; color: #5a3e1b; }
     details { margin-top: 12px; background: #fff; border-radius: 6px; padding: 12px 16px; box-shadow: 0 1px 4px rgba(0,0,0,0.05); }
     summary { cursor: pointer; font-weight: bold; color: #5a3e1b; }
     .past-body { white-space: pre-wrap; margin-top: 12px; font-size: 0.95em; }
+    .rss { font-size: 0.8em; color: #c8a96e; text-decoration: none; margin-left: 8px; }
+    .empty { color: #999; }
   </style>
 </head>
 <body>
-  <p class="episode">第2話</p>
-  <h1>📖 第2話「闇の帳と、灯守人の誓い」</h1>
-  <p class="date">📅 更新日：2026年06月05日</p>
-  <div class="story">夜が来ると、世界は「闇」に喰われる。
-それはただの暗がりではない。全てを塗り潰し、形あるものを無に帰す、底なしの虚無。人々はその夜の闇を「夜哭きの闇」と呼</div>
+  <div id="latest"></div>
 
   <div class="archive">
-    <h2 style="font-size:1.1em; color:#5a3e1b;">📚 バックナンバー</h2>
-    <details>
-      <summary>第2話｜第2話「闇の帳と、灯守人の誓い」（2026年06月05日）</summary>
-      <div class="past-body">夜が来ると、世界は「闇」に喰われる。
-それはただの暗がりではない。全てを塗り潰し、形あるものを無に帰す、底なしの虚無。人々はその夜の闇を「夜哭きの闇」と呼</div>
-    </details>
-    <details>
-      <summary>第1話｜夜哭きの闇と、暁の灯（ともしび）（2026年06月05日）</summary>
-      <div class="past-body">夜が来ると、世界は「闇」に喰われる。
-それはただの暗がりではない。全てを塗り潰し、形あるものを無に帰す、底なしの虚無。人々はその夜の闇を「夜哭きの闇」と</div>
-    </details>
+    <h2>📚 バックナンバー <a class="rss" href="rss.xml">RSS</a></h2>
+    <div id="archive"></div>
   </div>
+
+  <script>
+    fetch('stories.json', { cache: 'no-store' })
+      .then(function (r) { return r.json(); })
+      .then(function (stories) {
+        var latest = document.getElementById('latest');
+        if (!stories.length) {
+          latest.innerHTML = '<p class="empty">まだ物語がありません。次の月曜をお待ちください。</p>';
+          return;
+        }
+
+        var s = stories[stories.length - 1];
+        var ep = document.createElement('p');
+        ep.className = 'episode';
+        ep.textContent = '第' + s.episode + '話';
+        var h1 = document.createElement('h1');
+        h1.textContent = '📖 ' + s.title;
+        var date = document.createElement('p');
+        date.className = 'date';
+        date.textContent = '📅 更新日：' + s.date;
+        var story = document.createElement('div');
+        story.className = 'story';
+        story.textContent = s.body;        // textContent なのでHTMLとして解釈されない（安全）
+        latest.append(ep, h1, date, story);
+
+        var archive = document.getElementById('archive');
+        stories.slice(0, -1).reverse().forEach(function (p) {
+          var d = document.createElement('details');
+          d.id = 'ep' + p.episode;
+          var sm = document.createElement('summary');
+          sm.textContent = '第' + p.episode + '話｜' + p.title + '（' + p.date + '）';
+          var b = document.createElement('div');
+          b.className = 'past-body';
+          b.textContent = p.body;
+          d.append(sm, b);
+          archive.append(d);
+        });
+      })
+      .catch(function () {
+        document.getElementById('latest').innerHTML =
+          '<p class="empty">読み込みに失敗しました。</p>';
+      });
+  </script>
 </body>
 </html>
