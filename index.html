@@ -24,6 +24,7 @@
     details { margin-top: 12px; background: #fff; border-radius: 6px; padding: 12px 16px; box-shadow: 0 1px 4px rgba(0,0,0,0.05); }
     summary { cursor: pointer; font-weight: bold; color: #5a3e1b; }
     .past-body { white-space: pre-wrap; margin-top: 12px; font-size: 0.95em; }
+    rt { font-size: 0.55em; color: #666; }
     .rss { font-size: 0.8em; color: #c8a96e; text-decoration: none; margin-left: 8px; }
     .empty { color: #999; }
   </style>
@@ -37,6 +38,35 @@
   </div>
 
   <script>
+    // 青空文庫風ルビ（親文字《よみ》／｜親文字《よみ》）を <ruby> に変換して安全に描画する。
+    // すべてのテキストは createTextNode / textContent 経由なのでHTMLとして解釈されない。
+    function renderStory(container, text) {
+      var KANJI = '一-鿿々-〇ヶ'; // 漢字 + 々〆〇ヶ
+      var re = new RegExp(
+        '｜([^｜《》]+)《([^《》]+)》' + // ｜親文字《よみ》
+        '|([' + KANJI + ']+)《([^《》]+)》',            // 漢字列《よみ》
+        'g'
+      );
+      var last = 0, m;
+      while ((m = re.exec(text)) !== null) {
+        if (m.index > last) {
+          container.appendChild(document.createTextNode(text.slice(last, m.index)));
+        }
+        var base = m[1] !== undefined ? m[1] : m[3];
+        var reading = m[2] !== undefined ? m[2] : m[4];
+        var ruby = document.createElement('ruby');
+        ruby.appendChild(document.createTextNode(base));
+        var rt = document.createElement('rt');
+        rt.textContent = reading;
+        ruby.appendChild(rt);
+        container.appendChild(ruby);
+        last = re.lastIndex;
+      }
+      if (last < text.length) {
+        container.appendChild(document.createTextNode(text.slice(last)));
+      }
+    }
+
     fetch('stories.json', { cache: 'no-store' })
       .then(function (r) { return r.json(); })
       .then(function (stories) {
@@ -57,7 +87,7 @@
         date.textContent = '📅 更新日：' + s.date;
         var story = document.createElement('div');
         story.className = 'story';
-        story.textContent = s.body;        // textContent なのでHTMLとして解釈されない（安全）
+        renderStory(story, s.body);        // ルビを <ruby> に変換して安全に描画
         latest.append(ep, h1, date, story);
 
         var archive = document.getElementById('archive');
@@ -68,7 +98,7 @@
           sm.textContent = '第' + p.episode + '話｜' + p.title + '（' + p.date + '）';
           var b = document.createElement('div');
           b.className = 'past-body';
-          b.textContent = p.body;
+          renderStory(b, p.body);
           d.append(sm, b);
           archive.append(d);
         });
