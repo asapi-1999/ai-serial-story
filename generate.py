@@ -39,7 +39,7 @@ try:
     with open("index.html", "r", encoding="utf-8") as f:
         content = f.read()
     past = re.findall(r"<details>[\s\S]*?</details>", content)
-    archive_html = "\n".join(past[:10])
+    archive_html = "\n".join(past[:200])
 except:
     pass
 
