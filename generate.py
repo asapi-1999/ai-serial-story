@@ -5,9 +5,6 @@ today = datetime.datetime.now(
     datetime.timezone(datetime.timedelta(hours=9))
 ).strftime("%Y年%m月%d日")
 
-# -----------------------------------------------
-# 過去の話をstories.jsonから読み込む
-# -----------------------------------------------
 try:
     with open("stories.json", "r", encoding="utf-8") as f:
         stories = json.load(f)
@@ -16,10 +13,8 @@ except:
 
 episode_number = len(stories) + 1
 
-# 直近3話をコンテキストとして渡す
 context = ""
 if len(stories) == 0:
-    # 第1話：世界観・キャラクターを設定する
     prompt = (
         "あなたはプロの小説家です。\n"
         "これから長編ファンタジー小説の連載を始めます。\n"
@@ -33,7 +28,6 @@ if len(stories) == 0:
         "【本文】\nここに本文"
     )
 else:
-    # 直近3話分のあらすじを作成
     recent = stories[-3:]
     for s in recent:
         context += f"第{s['episode']}話「{s['title']}」\n{s['body']}\n\n"
@@ -55,9 +49,6 @@ else:
         "【本文】\nここに本文"
     )
 
-# -----------------------------------------------
-# Gemini APIで物語を生成
-# -----------------------------------------------
 data = json.dumps({
     "contents": [{"parts": [{"text": prompt}]}],
     "generationConfig": {"maxOutputTokens": 2000}
@@ -72,15 +63,11 @@ req = urllib.request.Request(
 res = json.loads(urllib.request.urlopen(req).read())
 story = res["candidates"][0]["content"]["parts"][0]["text"]
 
-# タイトルと本文を分割
 title_match = re.search(r"【タイトル】(.+)", story)
 body_match  = re.search(r"【本文】([\s\S]+)", story)
 title = title_match.group(1).strip() if title_match else f"第{episode_number}話"
 body  = body_match.group(1).strip()  if body_match  else story
 
-# -----------------------------------------------
-# stories.jsonに今回の話を追加して保存
-# -----------------------------------------------
 stories.append({
     "episode": episode_number,
     "title": title,
@@ -91,11 +78,6 @@ stories.append({
 with open("stories.json", "w", encoding="utf-8") as f:
     json.dump(stories, f, ensure_ascii=False, indent=2)
 
-# -----------------------------------------------
-# index.htmlを生成
-# -----------------------------------------------
-
-# バックナンバーHTML（新しい順）
 archive_html = ""
 for s in reversed(stories):
     archive_html += f"""
@@ -135,7 +117,6 @@ html = """<!DOCTYPE html>
   <h1>📖 """ + title + """</h1>
   <p class="date">📅 更新日：""" + today + """</p>
   <div class="story">""" + body + """</div>
-
   <div class="archive">
     <h2 style="font-size:1.1em; color:#5a3e1b;">📚 バックナンバー</h2>""" + archive_html + """
   </div>
@@ -146,27 +127,3 @@ with open("index.html", "w", encoding="utf-8") as f:
     f.write(html)
 
 print(f"完了：第{episode_number}話「{title}」")
-```
-
-4. 「**Commit changes**」をクリック
-
----
-
-## 動作確認
-
-1. 「**Actions**」→「**AI Serial Story Generator**」
-2. 「**Run workflow**」→「**Run workflow**」
-3. 緑✅が出たらURLを確認
-
----
-
-## 更新のたびにこうなります
-
-```
-第1話：世界観・キャラクターを一から作る
-　↓
-第2話：第1話の続きを生成
-　↓
-第3話：第1・2話を参考に続きを生成
-　↓
-第4話以降：直近3話を参考に続きを生成
