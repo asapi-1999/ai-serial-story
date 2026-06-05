@@ -86,8 +86,6 @@ for s in reversed(stories):
       <div class="past-body">{s['body']}</div>
     </details>"""
 
-GITHUB_TOKEN = os.environ.get("GH_PAT", "")
-
 html = """<!DOCTYPE html>
 <html lang="ja">
 <head>
@@ -112,20 +110,6 @@ html = """<!DOCTYPE html>
     details { margin-top: 12px; background: #fff; border-radius: 6px; padding: 12px 16px; box-shadow: 0 1px 4px rgba(0,0,0,0.05); }
     summary { cursor: pointer; font-weight: bold; color: #5a3e1b; }
     .past-body { white-space: pre-wrap; margin-top: 12px; font-size: 0.95em; }
-    .btn {
-      display: inline-block;
-      margin-top: 24px;
-      padding: 12px 28px;
-      background: #c8a96e;
-      color: #fff;
-      border: none;
-      border-radius: 8px;
-      font-size: 1em;
-      cursor: pointer;
-    }
-    .btn:hover { background: #a8893e; }
-    .btn:disabled { background: #ccc; cursor: not-allowed; }
-    #status { margin-top: 12px; font-size: 0.9em; color: #666; }
   </style>
 </head>
 <body>
@@ -134,44 +118,9 @@ html = """<!DOCTYPE html>
   <p class="date">📅 更新日：""" + today + """</p>
   <div class="story">""" + body + """</div>
 
-  <button class="btn" id="genBtn" onclick="generateNext()">📝 次の話を生成する</button>
-  <p id="status"></p>
-
   <div class="archive">
     <h2 style="font-size:1.1em; color:#5a3e1b;">📚 バックナンバー</h2>""" + archive_html + """
   </div>
-
-  <script>
-    function generateNext() {
-      const btn = document.getElementById('genBtn');
-      const status = document.getElementById('status');
-      btn.disabled = true;
-      btn.textContent = '⏳ 生成中...';
-      status.textContent = '生成をリクエストしました。約2分後にページを自動更新します...';
-
-      fetch('https://api.github.com/repos/asapi-1999/ai-serial-story/actions/workflows/generate_story.yml/dispatches', {
-        method: 'POST',
-        headers: {
-          'Authorization': 'Bearer """ + GITHUB_TOKEN + """',
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({ ref: 'main' })
-      }).then(res => {
-        if (res.status === 204) {
-          status.textContent = '✅ リクエスト成功！2分後に自動更新します...';
-          setTimeout(() => location.reload(), 120000);
-        } else {
-          status.textContent = '❌ エラーが発生しました。もう一度試してください。';
-          btn.disabled = false;
-          btn.textContent = '📝 次の話を生成する';
-        }
-      }).catch(() => {
-        status.textContent = '❌ エラーが発生しました。';
-        btn.disabled = false;
-        btn.textContent = '📝 次の話を生成する';
-      });
-    }
-  </script>
 </body>
 </html>"""
 
