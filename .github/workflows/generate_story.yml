@@ -23,7 +23,9 @@ jobs:
         run: |
           git config user.name "github-actions"
           git config user.email "actions@github.com"
+          git stash
           git pull --rebase origin main
+          git stash pop
           git add index.html stories.json
           git commit -m "AI物語を自動更新 $(date '+%Y-%m-%d')" || echo "変更なし"
           git push
