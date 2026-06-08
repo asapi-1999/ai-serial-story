@@ -35,6 +35,13 @@ def section(tag, text):
     return m.group(1).strip() if m else ""
 
 
+def section_line(tag, text):
+    """【タグ】と同じ行の中身だけを取り出す（タイトルなど1行用）。
+    改行や次の【…】で必ず打ち切るので、本文を巻き込まない。"""
+    m = re.search(r"【" + tag + r"】[ \t　]*([^\n【]*)", text)
+    return m.group(1).strip() if m else ""
+
+
 def parse_people(text):
     """1行1人「名前：説明」をパースして辞書のリストに。"""
     people = []
@@ -146,13 +153,21 @@ if finish == "MAX_TOKENS":
 
 
 # ----- パース -----
-title = section("タイトル", story) or f"第{episode_number}話"
+# タイトルは必ず1行だけ取り出す（【本文】マーカーが欠けても本文を巻き込まない）。
+title = section_line("タイトル", story)
 # モデルが「第N話「…」」のように話数を付けた場合は除去する。
 title = re.sub(r"^第?\s*\d+\s*話[「『：:\s]*", "", title).strip().strip("「」『』").strip()
 if not title:
     title = f"第{episode_number}話"
 
-body = section("本文", story) or story.strip()
+# 本文は【本文】マーカーから抽出する。マーカーが欠けた回に全文へフォールバックすると
+# タイトル・あらすじまで本文に混入するため、抽出できなければエラーで止める（壊れたデータを保存しない）。
+body = section("本文", story)
+if not body:
+    raise SystemExit(
+        "【本文】マーカーが見つからず本文を抽出できませんでした。"
+        f"出力フォーマットを確認してください:\n{story[:500]}"
+    )
 summary = section("今回のあらすじ", story) or title
 
 # ----- ストーリーバイブル更新 -----
