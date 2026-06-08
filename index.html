@@ -15,7 +15,10 @@
       color: #2c2c2c;
       background: #fdf9f3;
     }
-    h1 { font-size: 1.4em; border-bottom: 2px solid #c8a96e; padding-bottom: 10px; color: #5a3e1b; }
+    .site-header { text-align: center; margin-bottom: 28px; }
+    .series-label { color: #c8a96e; font-size: 0.8em; letter-spacing: 0.12em; margin: 0 0 6px; }
+    h1 { font-size: 1.8em; color: #5a3e1b; margin: 0; }
+    h2.episode-title { font-size: 1.3em; border-bottom: 2px solid #c8a96e; padding-bottom: 10px; color: #5a3e1b; }
     .episode { color: #c8a96e; font-size: 0.9em; margin-bottom: 4px; }
     .date { color: #999; font-size: 0.85em; margin-bottom: 24px; }
     .story { white-space: pre-wrap; font-size: 1.05em; background: #fff; padding: 24px; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.06); }
@@ -30,6 +33,11 @@
   </style>
 </head>
 <body>
+  <header class="site-header" id="site-header" hidden>
+    <p class="series-label">📜 全5話完結の連載小説</p>
+    <h1 id="work-title"></h1>
+  </header>
+
   <div id="latest"></div>
 
   <div class="archive">
@@ -67,9 +75,23 @@
       }
     }
 
-    fetch('stories.json', { cache: 'no-store' })
-      .then(function (r) { return r.json(); })
-      .then(function (stories) {
+    var TOTAL_EPISODES = 5;
+
+    Promise.all([
+      fetch('bible.json', { cache: 'no-store' }).then(function (r) { return r.json(); }).catch(function () { return {}; }),
+      fetch('stories.json', { cache: 'no-store' }).then(function (r) { return r.json(); })
+    ])
+      .then(function (results) {
+        var bible = results[0] || {};
+        var stories = results[1];
+
+        // 作品全体のタイトルをヘッダーに表示
+        if (bible.work_title) {
+          document.title = bible.work_title;
+          document.getElementById('work-title').textContent = bible.work_title;
+          document.getElementById('site-header').hidden = false;
+        }
+
         var latest = document.getElementById('latest');
         if (!stories.length) {
           latest.innerHTML = '<p class="empty">まだ物語がありません。次の月曜をお待ちください。</p>';
@@ -79,8 +101,10 @@
         var s = stories[stories.length - 1];
         var ep = document.createElement('p');
         ep.className = 'episode';
-        ep.textContent = '第' + s.episode + '話';
-        var h1 = document.createElement('h1');
+        ep.textContent = '第' + s.episode + '話 ／ 全' + TOTAL_EPISODES + '話'
+          + (s.episode >= TOTAL_EPISODES ? '（完結）' : '');
+        var h1 = document.createElement('h2');
+        h1.className = 'episode-title';
         h1.textContent = '📖 ' + s.title;
         var date = document.createElement('p');
         date.className = 'date';

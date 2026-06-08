@@ -25,8 +25,14 @@ def load_json(path, default):
 
 
 stories = load_json("stories.json", [])
-bible = load_json("bible.json", {"world": "", "characters": [], "synopsis": []})
+bible = load_json("bible.json", {"work_title": "", "world": "", "characters": [], "synopsis": []})
 episode_number = len(stories) + 1
+
+# 全5話で完結する連載。すでに完結済みなら何も生成しない（CIは正常終了させる）。
+TOTAL_EPISODES = 5
+if episode_number > TOTAL_EPISODES:
+    print(f"全{TOTAL_EPISODES}話が完結済みのため、生成をスキップします。")
+    raise SystemExit(0)
 
 
 def section(tag, text):
@@ -69,16 +75,20 @@ RUBY_GUIDE = (
 if episode_number == 1:
     prompt = (
         "あなたはプロの小説家です。\n"
-        "これから長編ファンタジー小説の連載を始めます。\n"
-        "以下の条件で第1話を書いてください：\n"
+        "これから全" + str(TOTAL_EPISODES) + "話で完結するファンタジー小説の連載を始めます。\n"
+        "以下の条件で第1話（全" + str(TOTAL_EPISODES) + "話）を書いてください：\n"
         "・独自の世界観とメインキャラクターを設定すること\n"
+        "・全" + str(TOTAL_EPISODES) + "話で物語が完結する構成を念頭に、第1話では世界観と"
+        "物語の核となる謎・目的を提示すること\n"
         "・続きが気になる終わり方にすること\n"
         "・日本語で1000字程度\n"
-        "・タイトルに「第1話」などの話数は含めないこと\n"
+        "・「作品タイトル」は連載全体を通したタイトル、「タイトル」は今回の話のタイトルとし、"
+        "どちらにも「第1話」などの話数は含めないこと\n"
         + RUBY_GUIDE +
         "・更新日：" + today + "\n\n"
         "以下の形式で、各セクションを必ず出力してください：\n"
-        "【タイトル】ここにタイトル（話数は含めない）\n"
+        "【作品タイトル】連載全体のタイトル\n"
+        "【タイトル】今回（第1話）のタイトル\n"
         "【本文】\nここに本文\n"
         "【世界観】物語の舞台・設定を2〜3文で要約\n"
         "【登場人物】1行に1人、「名前：説明」の形式で記載\n"
@@ -93,19 +103,36 @@ else:
     for s in stories[-2:]:
         recent += f"第{s['episode']}話「{s['title']}」\n{s['body']}\n\n"
 
+    work_title = bible.get("work_title") or "（未設定）"
+    is_final = episode_number == TOTAL_EPISODES
+    if is_final:
+        ending_rule = (
+            "・これは最終話（第" + str(TOTAL_EPISODES) + "話）です。"
+            "これまでに張られた伏線や謎を回収し、物語をきれいに完結させること\n"
+        )
+    else:
+        ending_rule = (
+            "・全" + str(TOTAL_EPISODES) + "話構成のうちの第" + str(episode_number) +
+            "話として、最終話（第" + str(TOTAL_EPISODES) + "話）での完結に向けて物語を前進させること\n"
+            "・続きが気になる終わり方にすること\n"
+        )
+
     prompt = (
-        "あなたはプロの小説家です。連載中のファンタジー小説の続きを書きます。\n\n"
+        "あなたはプロの小説家です。全" + str(TOTAL_EPISODES) +
+        "話で完結するファンタジー小説の続きを書きます。\n\n"
+        "# 作品タイトル\n" + work_title + "\n\n"
         "# これまでの設定\n"
         "## 世界観\n" + (bible.get("world") or "（未設定）") + "\n\n"
         "## 登場人物\n" + chars + "\n\n"
         "## あらすじ（各話1行）\n" + synopsis + "\n\n"
         "# 直近のエピソード（全文）\n" + recent +
         "---\n"
-        "上記の続きとなる第" + str(episode_number) + "話を書いてください。\n"
+        "上記の続きとなる第" + str(episode_number) + "話（全" + str(TOTAL_EPISODES) +
+        "話）を書いてください。\n"
         "以下の条件を守ってください：\n"
         "・登場人物・世界観は引き継ぐこと\n"
         "・直近のエピソードの終わりから自然につながること\n"
-        "・続きが気になる終わり方にすること\n"
+        + ending_rule +
         "・日本語で1000字程度\n"
         "・タイトルに「第" + str(episode_number) + "話」などの話数は含めないこと\n"
         + RUBY_GUIDE +
@@ -184,6 +211,8 @@ summary = section("今回のあらすじ", story) or title
 
 # ----- ストーリーバイブル更新 -----
 if episode_number == 1:
+    work_title = section_line("作品タイトル", story).strip("「」『』").strip()
+    bible["work_title"] = work_title or "無題の物語"
     bible["world"] = section("世界観", story)
     bible["characters"] = parse_people(section("登場人物", story))
 else:
@@ -228,12 +257,13 @@ for s in reversed(stories):
       <description>{html.escape(s['body'])}</description>
     </item>"""
 
+channel_title = bible.get("work_title") or "AI連載物語"
 rss = f"""<?xml version="1.0" encoding="UTF-8"?>
 <rss version="2.0">
   <channel>
-    <title>AI連載物語</title>
+    <title>{html.escape(channel_title)}</title>
     <link>{SITE_URL}</link>
-    <description>AIが毎週月曜に連載するファンタジー小説</description>
+    <description>AIが毎週月曜に連載する全{TOTAL_EPISODES}話完結のファンタジー小説</description>
     <language>ja</language>{items}
   </channel>
 </rss>"""
