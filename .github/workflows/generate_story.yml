@@ -5,6 +5,12 @@ on:
     - cron: '0 0 * * 1'
   workflow_dispatch:
 
+# スケジュール実行と手動実行が重なっても push が競合しないよう直列化する。
+# cancel-in-progress: false で実行中はキャンセルせず、新しい実行を待たせる。
+concurrency:
+  group: generate-story
+  cancel-in-progress: false
+
 jobs:
   generate:
     runs-on: ubuntu-latest
