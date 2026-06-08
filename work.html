@@ -38,36 +38,8 @@
   <p class="work-status" id="work-status"></p>
   <div id="episodes"></div>
 
+  <script src="render.js"></script>
   <script>
-    // 青空文庫風ルビ（親文字《よみ》／｜親文字《よみ》）を <ruby> に変換して安全に描画する。
-    // すべてのテキストは createTextNode / textContent 経由なのでHTMLとして解釈されない。
-    function renderStory(container, text) {
-      var KANJI = '一-鿿々-〇ヶ'; // 漢字 + 々〆〇ヶ
-      var re = new RegExp(
-        '｜([^｜《》]+)《([^《》]+)》' + // ｜親文字《よみ》
-        '|([' + KANJI + ']+)《([^《》]+)》',            // 漢字列《よみ》
-        'g'
-      );
-      var last = 0, m;
-      while ((m = re.exec(text)) !== null) {
-        if (m.index > last) {
-          container.appendChild(document.createTextNode(text.slice(last, m.index)));
-        }
-        var base = m[1] !== undefined ? m[1] : m[3];
-        var reading = m[2] !== undefined ? m[2] : m[4];
-        var ruby = document.createElement('ruby');
-        ruby.appendChild(document.createTextNode(base));
-        var rt = document.createElement('rt');
-        rt.textContent = reading;
-        ruby.appendChild(rt);
-        container.appendChild(ruby);
-        last = re.lastIndex;
-      }
-      if (last < text.length) {
-        container.appendChild(document.createTextNode(text.slice(last)));
-      }
-    }
-
     var TOTAL_EPISODES = 5;
 
     function getParam(name) {
@@ -108,8 +80,8 @@
           return;
         }
 
-        document.title = data.title;
-        document.getElementById('work-title').textContent = data.title;
+        document.title = stripRuby(data.title);   // タブ名はルビ記号を外した素のテキスト
+        renderRuby(document.getElementById('work-title'), data.title);
         var done = data.episodes.length >= TOTAL_EPISODES;
         document.getElementById('work-status').textContent =
           '全' + TOTAL_EPISODES + '話' + (done ? '・完結' : '（第' + data.episodes.length + '話まで公開中）');
@@ -124,13 +96,14 @@
           ep.textContent = '第' + p.episode + '話';
           var h = document.createElement('h2');
           h.className = 'episode-title';
-          h.textContent = '📖 ' + p.title;
+          h.appendChild(document.createTextNode('📖 '));
+          renderRuby(h, p.title);
           var d = document.createElement('p');
           d.className = 'date';
           d.textContent = '📅 ' + p.date;
           var st = document.createElement('div');
           st.className = 'story';
-          renderStory(st, p.body);        // ルビを <ruby> に変換して安全に描画
+          renderRuby(st, p.body);        // ルビを <ruby> に変換して安全に描画
           blk.append(ep, h, d, st);
           box.appendChild(blk);
         });

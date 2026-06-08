@@ -31,36 +31,8 @@
 <body>
   <div id="latest"></div>
 
+  <script src="render.js"></script>
   <script>
-    // 青空文庫風ルビ（親文字《よみ》／｜親文字《よみ》）を <ruby> に変換して安全に描画する。
-    // すべてのテキストは createTextNode / textContent 経由なのでHTMLとして解釈されない。
-    function renderStory(container, text) {
-      var KANJI = '一-鿿々-〇ヶ'; // 漢字 + 々〆〇ヶ
-      var re = new RegExp(
-        '｜([^｜《》]+)《([^《》]+)》' + // ｜親文字《よみ》
-        '|([' + KANJI + ']+)《([^《》]+)》',            // 漢字列《よみ》
-        'g'
-      );
-      var last = 0, m;
-      while ((m = re.exec(text)) !== null) {
-        if (m.index > last) {
-          container.appendChild(document.createTextNode(text.slice(last, m.index)));
-        }
-        var base = m[1] !== undefined ? m[1] : m[3];
-        var reading = m[2] !== undefined ? m[2] : m[4];
-        var ruby = document.createElement('ruby');
-        ruby.appendChild(document.createTextNode(base));
-        var rt = document.createElement('rt');
-        rt.textContent = reading;
-        ruby.appendChild(rt);
-        container.appendChild(ruby);
-        last = re.lastIndex;
-      }
-      if (last < text.length) {
-        container.appendChild(document.createTextNode(text.slice(last)));
-      }
-    }
-
     var TOTAL_EPISODES = 5;
 
     Promise.all([
@@ -82,13 +54,15 @@
         var workTitle = bible.work_title || '無題の物語';
         var s = stories[stories.length - 1];          // 最新話
         var workUrl = 'work.html?work=' + library.length;   // 連載中の作品ページ
-        document.title = workTitle + ' - 第' + s.episode + '話';
+        document.title = stripRuby(workTitle) + ' - 第' + s.episode + '話';
 
         var wt = document.createElement('p');
         wt.className = 'work-title';
         var wa = document.createElement('a');
         wa.href = workUrl;
-        wa.textContent = '『' + workTitle + '』';
+        wa.appendChild(document.createTextNode('『'));
+        renderRuby(wa, workTitle);
+        wa.appendChild(document.createTextNode('』'));
         wt.appendChild(wa);
 
         var ep = document.createElement('p');
@@ -98,7 +72,8 @@
 
         var h1 = document.createElement('h1');
         h1.className = 'episode-title';
-        h1.textContent = '📖 ' + s.title;
+        h1.appendChild(document.createTextNode('📖 '));
+        renderRuby(h1, s.title);
 
         var date = document.createElement('p');
         date.className = 'date';
@@ -106,7 +81,7 @@
 
         var story = document.createElement('div');
         story.className = 'story';
-        renderStory(story, s.body);        // ルビを <ruby> に変換して安全に描画
+        renderRuby(story, s.body);        // ルビを <ruby> に変換して安全に描画
 
         var nav = document.createElement('p');
         nav.className = 'nav';

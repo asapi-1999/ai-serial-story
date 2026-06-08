@@ -50,17 +50,20 @@
     <div id="completed"></div>
   </section>
 
+  <script src="render.js"></script>
   <script>
     var TOTAL_EPISODES = 5;
 
-    // 作品カード（リンク）を生成する。タイトル等は textContent 経由でHTMLとして解釈させない。
+    // 作品カード（リンク）を生成する。タイトルは renderRuby でルビ変換（XSS安全）。
     function makeCard(href, title, meta, done) {
       var a = document.createElement('a');
       a.className = 'card';
       a.href = href;
       var t = document.createElement('div');
       t.className = 'title';
-      t.textContent = '『' + title + '』';
+      t.appendChild(document.createTextNode('『'));
+      renderRuby(t, title);
+      t.appendChild(document.createTextNode('』'));
       if (done) {
         var badge = document.createElement('span');
         badge.className = 'badge done';

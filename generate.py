@@ -230,6 +230,9 @@ if not body:
         f"出力フォーマットを確認してください:\n{story[:500]}"
     )
 summary = section("今回のあらすじ", story) or title
+# 最終セクションは文末まで取り込むため、モデルが書き足した「更新日：…」等が
+# あらすじ末尾に紛れ込むことがある。除去しておく（次回以降の文脈に残さない）。
+summary = re.split(r"\s*更新日[：:]", summary)[0].strip()
 
 # ----- ストーリーバイブル更新 -----
 if episode_number == 1:
