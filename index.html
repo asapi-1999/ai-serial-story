@@ -11,155 +11,105 @@
       max-width: 680px;
       margin: 0 auto;
       padding: 30px 20px;
-      line-height: 2.0;
+      line-height: 1.8;
       color: #2c2c2c;
       background: #fdf9f3;
     }
-    .site-header { text-align: center; margin-bottom: 28px; }
-    .series-label { color: #c8a96e; font-size: 0.8em; letter-spacing: 0.12em; margin: 0 0 6px; }
-    h1 { font-size: 1.8em; color: #5a3e1b; margin: 0; }
-    h2.episode-title { font-size: 1.3em; border-bottom: 2px solid #c8a96e; padding-bottom: 10px; color: #5a3e1b; }
-    .episode { color: #c8a96e; font-size: 0.9em; margin-bottom: 4px; }
-    .date { color: #999; font-size: 0.85em; margin-bottom: 24px; }
-    .story { white-space: pre-wrap; font-size: 1.05em; background: #fff; padding: 24px; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.06); }
-    .archive { margin-top: 40px; }
-    .archive h2 { font-size: 1.1em; color: #5a3e1b; }
-    details { margin-top: 12px; background: #fff; border-radius: 6px; padding: 12px 16px; box-shadow: 0 1px 4px rgba(0,0,0,0.05); }
-    summary { cursor: pointer; font-weight: bold; color: #5a3e1b; }
-    .past-body { white-space: pre-wrap; margin-top: 12px; font-size: 0.95em; }
-    #library > details > details { margin-left: 14px; box-shadow: none; border-left: 2px solid #efe3cf; }
-    rt { font-size: 0.55em; color: #666; }
-    .rss { font-size: 0.8em; color: #c8a96e; text-decoration: none; margin-left: 8px; }
+    header.home { text-align: center; margin-bottom: 24px; }
+    header.home h1 { font-size: 1.8em; color: #5a3e1b; margin: 0 0 6px; }
+    .tagline { color: #c8a96e; font-size: 0.85em; margin: 0; }
+    .rss { font-size: 0.8em; color: #c8a96e; text-decoration: none; margin-left: 6px; }
+    h2.section-title { font-size: 1.1em; color: #5a3e1b; border-bottom: 2px solid #c8a96e; padding-bottom: 6px; margin-top: 36px; }
+    .card {
+      display: block; text-decoration: none; color: inherit;
+      background: #fff; border-radius: 8px; padding: 18px 20px; margin-top: 14px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+      transition: transform .08s ease, box-shadow .08s ease;
+    }
+    .card:hover { transform: translateY(-2px); box-shadow: 0 4px 14px rgba(0,0,0,0.10); }
+    .card .title { font-size: 1.15em; font-weight: bold; color: #5a3e1b; }
+    .card .meta { color: #999; font-size: 0.85em; margin-top: 4px; }
+    .badge { display: inline-block; font-size: 0.72em; padding: 2px 8px; border-radius: 10px; background: #c8a96e; color: #fff; margin-left: 8px; vertical-align: middle; }
+    .badge.done { background: #7a9e6e; }
     .empty { color: #999; }
   </style>
 </head>
 <body>
-  <header class="site-header" id="site-header" hidden>
-    <p class="series-label">📜 全5話完結の連載小説</p>
-    <h1 id="work-title"></h1>
+  <header class="home">
+    <h1>📚 AI連載物語</h1>
+    <p class="tagline">AIが毎週月曜に紡ぐ、全5話完結の物語<a class="rss" href="rss.xml">RSS</a></p>
   </header>
 
-  <div id="latest"></div>
+  <section>
+    <h2 class="section-title">連載中</h2>
+    <div id="current"></div>
+  </section>
 
-  <div class="archive">
-    <h2>📚 バックナンバー <a class="rss" href="rss.xml">RSS</a></h2>
-    <div id="archive"></div>
-  </div>
-
-  <div class="archive" id="library-section" hidden>
-    <h2>🏛 完結した作品</h2>
-    <div id="library"></div>
-  </div>
+  <section id="completed-section" hidden>
+    <h2 class="section-title">完結した作品</h2>
+    <div id="completed"></div>
+  </section>
 
   <script>
-    // 青空文庫風ルビ（親文字《よみ》／｜親文字《よみ》）を <ruby> に変換して安全に描画する。
-    // すべてのテキストは createTextNode / textContent 経由なのでHTMLとして解釈されない。
-    function renderStory(container, text) {
-      var KANJI = '一-鿿々-〇ヶ'; // 漢字 + 々〆〇ヶ
-      var re = new RegExp(
-        '｜([^｜《》]+)《([^《》]+)》' + // ｜親文字《よみ》
-        '|([' + KANJI + ']+)《([^《》]+)》',            // 漢字列《よみ》
-        'g'
-      );
-      var last = 0, m;
-      while ((m = re.exec(text)) !== null) {
-        if (m.index > last) {
-          container.appendChild(document.createTextNode(text.slice(last, m.index)));
-        }
-        var base = m[1] !== undefined ? m[1] : m[3];
-        var reading = m[2] !== undefined ? m[2] : m[4];
-        var ruby = document.createElement('ruby');
-        ruby.appendChild(document.createTextNode(base));
-        var rt = document.createElement('rt');
-        rt.textContent = reading;
-        ruby.appendChild(rt);
-        container.appendChild(ruby);
-        last = re.lastIndex;
-      }
-      if (last < text.length) {
-        container.appendChild(document.createTextNode(text.slice(last)));
-      }
-    }
-
     var TOTAL_EPISODES = 5;
+
+    // 作品カード（リンク）を生成する。タイトル等は textContent 経由でHTMLとして解釈させない。
+    function makeCard(href, title, meta, done) {
+      var a = document.createElement('a');
+      a.className = 'card';
+      a.href = href;
+      var t = document.createElement('div');
+      t.className = 'title';
+      t.textContent = '『' + title + '』';
+      if (done) {
+        var badge = document.createElement('span');
+        badge.className = 'badge done';
+        badge.textContent = '完結';
+        t.appendChild(badge);
+      }
+      var m = document.createElement('div');
+      m.className = 'meta';
+      m.textContent = meta;
+      a.append(t, m);
+      return a;
+    }
 
     Promise.all([
       fetch('bible.json', { cache: 'no-store' }).then(function (r) { return r.json(); }).catch(function () { return {}; }),
-      fetch('stories.json', { cache: 'no-store' }).then(function (r) { return r.json(); }),
+      fetch('stories.json', { cache: 'no-store' }).then(function (r) { return r.json(); }).catch(function () { return []; }),
       fetch('library.json', { cache: 'no-store' }).then(function (r) { return r.json(); }).catch(function () { return []; })
     ])
       .then(function (results) {
         var bible = results[0] || {};
-        var stories = results[1];
+        var stories = results[1] || [];
         var library = results[2] || [];
 
-        // 作品全体のタイトルをヘッダーに表示
-        if (bible.work_title) {
-          document.title = bible.work_title;
-          document.getElementById('work-title').textContent = bible.work_title;
-          document.getElementById('site-header').hidden = false;
+        // 連載中の作品
+        var current = document.getElementById('current');
+        if (stories.length) {
+          var done = stories.length >= TOTAL_EPISODES;
+          var meta = done
+            ? ('全' + TOTAL_EPISODES + '話・完結')
+            : ('第' + stories.length + '話まで公開 ／ 全' + TOTAL_EPISODES + '話');
+          current.appendChild(makeCard('work.html?w=current', bible.work_title || '無題の物語', meta, done));
+        } else {
+          current.innerHTML = '<p class="empty">まだ物語がありません。次の月曜をお待ちください。</p>';
         }
 
-        var latest = document.getElementById('latest');
-        if (!stories.length) {
-          latest.innerHTML = '<p class="empty">まだ物語がありません。次の月曜をお待ちください。</p>';
-          return;
-        }
-
-        var s = stories[stories.length - 1];
-        var ep = document.createElement('p');
-        ep.className = 'episode';
-        ep.textContent = '第' + s.episode + '話 ／ 全' + TOTAL_EPISODES + '話'
-          + (s.episode >= TOTAL_EPISODES ? '（完結）' : '');
-        var h1 = document.createElement('h2');
-        h1.className = 'episode-title';
-        h1.textContent = '📖 ' + s.title;
-        var date = document.createElement('p');
-        date.className = 'date';
-        date.textContent = '📅 更新日：' + s.date;
-        var story = document.createElement('div');
-        story.className = 'story';
-        renderStory(story, s.body);        // ルビを <ruby> に変換して安全に描画
-        latest.append(ep, h1, date, story);
-
-        var archive = document.getElementById('archive');
-        stories.slice(0, -1).reverse().forEach(function (p) {
-          var d = document.createElement('details');
-          d.id = 'ep' + p.episode;
-          var sm = document.createElement('summary');
-          sm.textContent = '第' + p.episode + '話｜' + p.title + '（' + p.date + '）';
-          var b = document.createElement('div');
-          b.className = 'past-body';
-          renderStory(b, p.body);
-          d.append(sm, b);
-          archive.append(d);
-        });
-
-        // 完結した過去作品（書庫）を新しい順に表示
+        // 完結した作品（新しい順に表示。リンクは library 内の元インデックスを使う）
         if (library.length) {
-          var libBox = document.getElementById('library');
-          library.slice().reverse().forEach(function (w) {
-            var work = document.createElement('details');
-            var wsum = document.createElement('summary');
-            wsum.textContent = '『' + w.work_title + '』（全' + w.episodes.length + '話・完結）';
-            work.appendChild(wsum);
-            w.episodes.forEach(function (p) {
-              var d = document.createElement('details');
-              var sm = document.createElement('summary');
-              sm.textContent = '第' + p.episode + '話｜' + p.title;
-              var b = document.createElement('div');
-              b.className = 'past-body';
-              renderStory(b, p.body);
-              d.append(sm, b);
-              work.appendChild(d);
-            });
-            libBox.appendChild(work);
+          var box = document.getElementById('completed');
+          var indexed = library.map(function (w, i) { return { work: w, index: i }; });
+          indexed.reverse().forEach(function (o) {
+            var meta = '全' + o.work.episodes.length + '話'
+              + (o.work.completed ? '・' + o.work.completed + ' 完結' : '');
+            box.appendChild(makeCard('work.html?w=' + o.index, o.work.work_title, meta, true));
           });
-          document.getElementById('library-section').hidden = false;
+          document.getElementById('completed-section').hidden = false;
         }
       })
       .catch(function () {
-        document.getElementById('latest').innerHTML =
+        document.getElementById('current').innerHTML =
           '<p class="empty">読み込みに失敗しました。</p>';
       });
   </script>

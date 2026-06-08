@@ -281,7 +281,7 @@ for s in reversed(stories):
     items += f"""
     <item>
       <title>第{s['episode']}話 {html.escape(s['title'])}</title>
-      <link>{SITE_URL}#ep{s['episode']}</link>
+      <link>{SITE_URL}work.html?w=current#ep{s['episode']}</link>
       <guid isPermaLink="false">w{work_index}-ep-{s['episode']}</guid>
       <pubDate>{pub}</pubDate>
       <description>{html.escape(s['body'])}</description>
