@@ -91,7 +91,8 @@
           var meta = done
             ? ('全' + TOTAL_EPISODES + '話・完結')
             : ('第' + stories.length + '話まで公開 ／ 全' + TOTAL_EPISODES + '話');
-          current.appendChild(makeCard('work.html?w=current', bible.work_title || '無題の物語', meta, done));
+          // 連載中の作品の安定インデックスは「完結済み作品数」（= library.length）。
+          current.appendChild(makeCard('work.html?work=' + library.length, bible.work_title || '無題の物語', meta, done));
         } else {
           current.innerHTML = '<p class="empty">まだ物語がありません。次の月曜をお待ちください。</p>';
         }
@@ -101,9 +102,10 @@
           var box = document.getElementById('completed');
           var indexed = library.map(function (w, i) { return { work: w, index: i }; });
           indexed.reverse().forEach(function (o) {
-            var meta = '全' + o.work.episodes.length + '話'
+            var epCount = o.work.episodes ? o.work.episodes.length : 0;
+            var meta = '全' + epCount + '話'
               + (o.work.completed ? '・' + o.work.completed + ' 完結' : '');
-            box.appendChild(makeCard('work.html?w=' + o.index, o.work.work_title, meta, true));
+            box.appendChild(makeCard('work.html?work=' + o.index, o.work.work_title, meta, true));
           });
           document.getElementById('completed-section').hidden = false;
         }

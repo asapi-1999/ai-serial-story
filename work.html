@@ -75,35 +75,36 @@
       return m ? decodeURIComponent(m[1]) : null;
     }
 
-    var w = getParam('w');
-    if (w === null || w === '') { w = 'current'; }
+    // 作品IDは安定インデックス（?work=N）。連載中の作品は N = 完結済み作品数。
+    // その作品が完結して書庫へ移っても N は変わらないため、同じURLで参照し続けられる。
+    Promise.all([
+      fetch('bible.json', { cache: 'no-store' }).then(function (r) { return r.json(); }).catch(function () { return {}; }),
+      fetch('stories.json', { cache: 'no-store' }).then(function (r) { return r.json(); }).catch(function () { return []; }),
+      fetch('library.json', { cache: 'no-store' }).then(function (r) { return r.json(); }).catch(function () { return []; })
+    ])
+      .then(function (results) {
+        var bible = results[0] || {};
+        var stories = results[1] || [];
+        var library = results[2] || [];
 
-    var dataPromise;
-    if (w === 'current') {
-      // 連載中の作品：bible.json（タイトル）と stories.json（各話）から構成
-      dataPromise = Promise.all([
-        fetch('bible.json', { cache: 'no-store' }).then(function (r) { return r.json(); }).catch(function () { return {}; }),
-        fetch('stories.json', { cache: 'no-store' }).then(function (r) { return r.json(); })
-      ]).then(function (res) {
-        return { title: (res[0] || {}).work_title || '無題の物語', episodes: res[1] || [] };
-      });
-    } else {
-      // 完結作品：library.json の該当インデックス
-      dataPromise = fetch('library.json', { cache: 'no-store' })
-        .then(function (r) { return r.json(); })
-        .then(function (lib) {
-          var idx = parseInt(w, 10);
-          var work = (lib || [])[idx];
-          if (!work) { return null; }
-          return { title: work.work_title, episodes: work.episodes || [] };
-        });
-    }
+        var currentIndex = library.length;   // 連載中の作品のインデックス
+        var raw = getParam('work');
+        var idx = (raw === null || raw === '') ? currentIndex : parseInt(raw, 10);
+        var isCurrent = (idx === currentIndex);
 
-    dataPromise
-      .then(function (data) {
+        var data;
+        if (isCurrent) {
+          data = { title: bible.work_title || '無題の物語', episodes: stories };
+        } else if (library[idx]) {
+          data = { title: library[idx].work_title, episodes: library[idx].episodes || [] };
+        } else {
+          data = null;
+        }
+
         if (!data || !data.episodes.length) {
-          document.getElementById('work-status').innerHTML =
-            '<span class="empty">作品が見つかりませんでした。</span>';
+          document.getElementById('work-status').innerHTML = isCurrent
+            ? '<span class="empty">まだ公開されていません。次の月曜をお待ちください。</span>'
+            : '<span class="empty">作品が見つかりませんでした。</span>';
           return;
         }
 
@@ -134,7 +135,7 @@
           box.appendChild(blk);
         });
 
-        // ?w=...#epN で来た場合は該当話までスクロール
+        // ?work=...#epN で来た場合は該当話までスクロール
         if (location.hash) {
           var el = document.getElementById(location.hash.slice(1));
           if (el) { el.scrollIntoView(); }

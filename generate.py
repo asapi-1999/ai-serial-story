@@ -90,8 +90,10 @@ RUBY_GUIDE = (
 if episode_number == 1:
     prompt = (
         "あなたはプロの小説家です。\n"
-        "これから全" + str(TOTAL_EPISODES) + "話で完結するファンタジー小説の連載を始めます。\n"
+        "これから全" + str(TOTAL_EPISODES) + "話で完結する連載小説を新しく始めます。\n"
         "以下の条件で第1話（全" + str(TOTAL_EPISODES) + "話）を書いてください：\n"
+        "・ジャンルは自由（ファンタジー／SF／ミステリー／恋愛／ホラー／歴史／日常 など何でも可）。"
+        "今回の作品のジャンルと作風を自由に選ぶこと\n"
         "・独自の世界観とメインキャラクターを設定すること\n"
         "・全" + str(TOTAL_EPISODES) + "話で物語が完結する構成を念頭に、第1話では世界観と"
         "物語の核となる謎・目的を提示すること\n"
@@ -134,7 +136,7 @@ else:
 
     prompt = (
         "あなたはプロの小説家です。全" + str(TOTAL_EPISODES) +
-        "話で完結するファンタジー小説の続きを書きます。\n\n"
+        "話で完結する連載小説の続きを書きます。\n\n"
         "# 作品タイトル\n" + work_title + "\n\n"
         "# これまでの設定\n"
         "## 世界観\n" + (bible.get("world") or "（未設定）") + "\n\n"
@@ -145,7 +147,7 @@ else:
         "上記の続きとなる第" + str(episode_number) + "話（全" + str(TOTAL_EPISODES) +
         "話）を書いてください。\n"
         "以下の条件を守ってください：\n"
-        "・登場人物・世界観は引き継ぐこと\n"
+        "・これまでのジャンル・作風・世界観・登場人物を引き継ぐこと\n"
         "・直近のエピソードの終わりから自然につながること\n"
         + ending_rule +
         "・日本語で1000字程度\n"
@@ -281,7 +283,7 @@ for s in reversed(stories):
     items += f"""
     <item>
       <title>第{s['episode']}話 {html.escape(s['title'])}</title>
-      <link>{SITE_URL}work.html?w=current#ep{s['episode']}</link>
+      <link>{SITE_URL}work.html?work={work_index}#ep{s['episode']}</link>
       <guid isPermaLink="false">w{work_index}-ep-{s['episode']}</guid>
       <pubDate>{pub}</pubDate>
       <description>{html.escape(s['body'])}</description>
@@ -293,7 +295,7 @@ rss = f"""<?xml version="1.0" encoding="UTF-8"?>
   <channel>
     <title>{html.escape(channel_title)}</title>
     <link>{SITE_URL}</link>
-    <description>AIが毎週月曜に連載する全{TOTAL_EPISODES}話完結のファンタジー小説</description>
+    <description>AIが毎週月曜に連載する全{TOTAL_EPISODES}話完結の物語</description>
     <language>ja</language>{items}
   </channel>
 </rss>"""
