@@ -24,15 +24,30 @@ def load_json(path, default):
         return default
 
 
+def fresh_bible():
+    return {"work_title": "", "world": "", "characters": [], "synopsis": []}
+
+
 stories = load_json("stories.json", [])
-bible = load_json("bible.json", {"work_title": "", "world": "", "characters": [], "synopsis": []})
+bible = load_json("bible.json", fresh_bible())
+library = load_json("library.json", [])
 episode_number = len(stories) + 1
 
-# 全5話で完結する連載。すでに完結済みなら何も生成しない（CIは正常終了させる）。
+# 全5話で完結する連載。完結済みなら、その作品を書庫(library.json)へ退避し、
+# 新しい作品を第1話から始める。退避の確定（ファイル書き込み）は生成成功後に行う。
 TOTAL_EPISODES = 5
-if episode_number > TOTAL_EPISODES:
-    print(f"全{TOTAL_EPISODES}話が完結済みのため、生成をスキップします。")
-    raise SystemExit(0)
+starting_new_work = episode_number > TOTAL_EPISODES
+completed_work = None
+if starting_new_work:
+    completed_work = {
+        "work_title": bible.get("work_title") or "無題の物語",
+        "completed": today_iso,
+        "episodes": stories,
+    }
+    print(f"前作「{completed_work['work_title']}」が全{TOTAL_EPISODES}話で完結。新しい作品を開始します。")
+    stories = []
+    bible = fresh_bible()
+    episode_number = 1
 
 
 def section(tag, text):
@@ -234,6 +249,12 @@ stories.append({
     "iso": today_iso,
     "body": body,
 })
+
+# 新作を開始した回では、完結した前作を書庫へ確定保存する（生成成功後に行う）。
+if starting_new_work and completed_work is not None:
+    library.append(completed_work)
+    with open("library.json", "w", encoding="utf-8") as f:
+        json.dump(library, f, ensure_ascii=False, indent=2)
 
 with open("stories.json", "w", encoding="utf-8") as f:
     json.dump(stories, f, ensure_ascii=False, indent=2)
