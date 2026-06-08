@@ -196,7 +196,12 @@ def call_gemini(prompt_text):
 
 
 res = call_gemini(prompt)
-cand = res["candidates"][0]
+candidates = res.get("candidates")
+if not candidates:
+    # セーフティブロック等で候補が返らない場合は promptFeedback を添えて止める。
+    feedback = res.get("promptFeedback", {})
+    raise SystemExit(f"Geminiが候補を返しませんでした（promptFeedback={feedback}）: {res}")
+cand = candidates[0]
 finish = cand.get("finishReason", "")
 parts = cand.get("content", {}).get("parts")
 if not parts or "text" not in parts[0]:
@@ -263,6 +268,10 @@ with open("bible.json", "w", encoding="utf-8") as f:
     json.dump(bible, f, ensure_ascii=False, indent=2)
 
 # ----- RSS生成 -----
+# guid は作品をまたいで一意にする必要がある（新作はエピソード番号が1から振り直されるため、
+# 単なる ep-N だと前作と衝突し、購読者に新作が「既読」扱いで届かない）。
+# 完結済み作品数を現在作品のインデックスとして前置きする（連載中は値が変わらず安定）。
+work_index = len(library)
 items = ""
 for s in reversed(stories):
     iso = s.get("iso") or today_iso
@@ -273,7 +282,7 @@ for s in reversed(stories):
     <item>
       <title>第{s['episode']}話 {html.escape(s['title'])}</title>
       <link>{SITE_URL}#ep{s['episode']}</link>
-      <guid isPermaLink="false">ep-{s['episode']}</guid>
+      <guid isPermaLink="false">w{work_index}-ep-{s['episode']}</guid>
       <pubDate>{pub}</pubDate>
       <description>{html.escape(s['body'])}</description>
     </item>"""
