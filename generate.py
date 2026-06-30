@@ -163,13 +163,21 @@ else:
 
 
 # ----- Gemini 呼び出し（リトライ付き・APIキーはヘッダーで送る）-----
-def call_gemini(prompt_text):
+# 一時的な不調は再試行する。ネットワーク/HTTPエラーだけでなく、
+# 「候補ゼロ（セーフティの揺らぎ）」「空応答」「MAX_TOKENS打ち切り」も対象に含める。
+# これらは1回の不調で起きることが多く、即停止すると週次更新が無駄に落ちるため。
+# 全試行が失敗したときだけ、最後の理由を添えて停止する。
+ATTEMPTS = 4
+
+
+def fetch_story(prompt_text):
     payload = json.dumps({
         "contents": [{"parts": [{"text": prompt_text}]}],
         "generationConfig": {
-            "maxOutputTokens": 8000,
+            # 思考分も maxOutputTokens に含まれるため、本文の枠を確保すべく多めに取る。
+            "maxOutputTokens": 12000,
             # 思考も少しだけ使わせて整合性を上げつつ、本文の出力枠も確保する。
-            # （0にすると思考オフ、-1で動的。打ち切り対策で十分な枠を残すこと）
+            # （0にすると思考オフ、-1で動的）
             "thinkingConfig": {"thinkingBudget": 2048},
         },
     }).encode()
@@ -177,7 +185,12 @@ def call_gemini(prompt_text):
     url = ("https://generativelanguage.googleapis.com/v1beta/"
            "models/gemini-2.5-flash:generateContent")
     last_err = None
-    for attempt in range(3):
+    for attempt in range(ATTEMPTS):
+        if attempt:
+            wait = 5 * attempt
+            print(f"再試行（{attempt + 1}/{ATTEMPTS}）… {wait}秒待機。直前の理由: {last_err}")
+            time.sleep(wait)
+        # --- API呼び出し ---
         try:
             req = urllib.request.Request(
                 url,
@@ -188,29 +201,30 @@ def call_gemini(prompt_text):
                 },
             )
             with urllib.request.urlopen(req, timeout=120) as r:
-                return json.loads(r.read())
+                res = json.loads(r.read())
         except urllib.error.URLError as e:
-            last_err = e
-            wait = 5 * (attempt + 1)
-            print(f"API呼び出し失敗（{attempt + 1}/3）: {e} … {wait}秒後に再試行")
-            time.sleep(wait)
-    raise SystemExit(f"API呼び出しに3回失敗しました: {last_err}")
+            last_err = f"API呼び出し失敗: {e}"
+            continue
+        # --- 応答の検証（不調なら次の試行へ）---
+        candidates = res.get("candidates")
+        if not candidates:
+            # セーフティブロック等。揺らぎで次回は通ることもあるため再試行する。
+            last_err = f"候補ゼロ（promptFeedback={res.get('promptFeedback', {})}）"
+            continue
+        cand = candidates[0]
+        finish = cand.get("finishReason", "")
+        parts = cand.get("content", {}).get("parts")
+        if not parts or "text" not in parts[0]:
+            last_err = f"本文が取得できませんでした（finishReason={finish}）"
+            continue
+        if finish == "MAX_TOKENS":
+            last_err = "出力がトークン上限で打ち切られました"
+            continue
+        return parts[0]["text"]
+    raise SystemExit(f"Gemini生成に{ATTEMPTS}回失敗しました。最後の理由: {last_err}")
 
 
-res = call_gemini(prompt)
-candidates = res.get("candidates")
-if not candidates:
-    # セーフティブロック等で候補が返らない場合は promptFeedback を添えて止める。
-    feedback = res.get("promptFeedback", {})
-    raise SystemExit(f"Geminiが候補を返しませんでした（promptFeedback={feedback}）: {res}")
-cand = candidates[0]
-finish = cand.get("finishReason", "")
-parts = cand.get("content", {}).get("parts")
-if not parts or "text" not in parts[0]:
-    raise SystemExit(f"本文が取得できませんでした（finishReason={finish}）: {res}")
-story = parts[0]["text"]
-if finish == "MAX_TOKENS":
-    raise SystemExit("出力がトークン上限で打ち切られました。maxOutputTokens を増やしてください。")
+story = fetch_story(prompt)
 
 
 # ----- パース -----
