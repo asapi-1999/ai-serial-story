@@ -20,8 +20,10 @@ def load_json(path, default):
     try:
         with open(path, "r", encoding="utf-8") as f:
             return json.load(f)
-    except Exception:
+    except FileNotFoundError:
         return default
+    except (json.JSONDecodeError, UnicodeDecodeError) as e:
+        raise SystemExit(f"{path} を読み込めません。JSON形式を確認してください: {e}") from e
 
 
 def fresh_bible():
@@ -31,6 +33,12 @@ def fresh_bible():
 stories = load_json("stories.json", [])
 bible = load_json("bible.json", fresh_bible())
 library = load_json("library.json", [])
+if not isinstance(stories, list):
+    raise SystemExit("stories.json のルートは配列である必要があります。")
+if not isinstance(bible, dict):
+    raise SystemExit("bible.json のルートはオブジェクトである必要があります。")
+if not isinstance(library, list):
+    raise SystemExit("library.json のルートは配列である必要があります。")
 episode_number = len(stories) + 1
 
 # 全5話で完結する連載。完結済みなら、その作品を書庫(library.json)へ退避し、
@@ -41,7 +49,7 @@ completed_work = None
 if starting_new_work:
     completed_work = {
         "work_title": bible.get("work_title") or "無題の物語",
-        "completed": today_iso,
+        "completed": stories[-1].get("iso") or today_iso,
         "episodes": stories,
     }
     print(f"前作「{completed_work['work_title']}」が全{TOTAL_EPISODES}話で完結。新しい作品を開始します。")
@@ -50,17 +58,53 @@ if starting_new_work:
     episode_number = 1
 
 
+SECTION_TAGS = (
+    "作品タイトル",
+    "タイトル",
+    "本文",
+    "世界観",
+    "登場人物",
+    "今回のあらすじ",
+    "新登場人物",
+)
+SECTION_TAG_PATTERN = "|".join(re.escape(name) for name in SECTION_TAGS)
+
+
 def section(tag, text):
-    """【タグ】の中身を次の【…】または末尾まで取り出す。"""
-    m = re.search(r"【" + tag + r"】\s*([\s\S]*?)(?=\n?【|$)", text)
+    """【タグ】の中身を次の既知のセクションまたは末尾まで取り出す。"""
+    m = re.search(
+        rf"^【{re.escape(tag)}】[ \t　]*(.*?)(?=^【(?:{SECTION_TAG_PATTERN})】|\Z)",
+        text,
+        re.MULTILINE | re.DOTALL,
+    )
     return m.group(1).strip() if m else ""
 
 
 def section_line(tag, text):
     """【タグ】と同じ行の中身だけを取り出す（タイトルなど1行用）。
     改行や次の【…】で必ず打ち切るので、本文を巻き込まない。"""
-    m = re.search(r"【" + tag + r"】[ \t　]*([^\n【]*)", text)
+    m = re.search(
+        rf"^【{re.escape(tag)}】[ \t　]*([^\r\n]*)",
+        text,
+        re.MULTILINE,
+    )
     return m.group(1).strip() if m else ""
+
+
+def missing_story_sections(text, first_episode):
+    """話数に応じた必須セクションのうち、欠けているものを返す。"""
+    required = ["タイトル", "本文", "今回のあらすじ"]
+    if first_episode:
+        required = ["作品タイトル", *required, "世界観", "登場人物"]
+    else:
+        required.append("新登場人物")
+
+    missing = []
+    for tag in required:
+        value = section_line(tag, text) if tag in ("作品タイトル", "タイトル") else section(tag, text)
+        if not value:
+            missing.append(f"【{tag}】")
+    return missing
 
 
 def parse_people(text):
@@ -164,7 +208,8 @@ else:
 
 # ----- Gemini 呼び出し（リトライ付き・APIキーはヘッダーで送る）-----
 # 一時的な不調は再試行する。ネットワーク/HTTPエラーだけでなく、
-# 「候補ゼロ（セーフティの揺らぎ）」「空応答」「MAX_TOKENS打ち切り」も対象に含める。
+# 「候補ゼロ（セーフティの揺らぎ）」「空応答」「MAX_TOKENS打ち切り」に加え、
+# 必須マーカーが欠けた出力も対象に含める。
 # これらは1回の不調で起きることが多く、即停止すると週次更新が無駄に落ちるため。
 # 全試行が失敗したときだけ、最後の理由を添えて停止する。
 ATTEMPTS = 4
@@ -213,14 +258,31 @@ def fetch_story(prompt_text):
             continue
         cand = candidates[0]
         finish = cand.get("finishReason", "")
-        parts = cand.get("content", {}).get("parts")
-        if not parts or "text" not in parts[0]:
+        if finish != "STOP":
+            detail = cand.get("finishMessage")
+            last_err = f"生成が正常終了しませんでした（finishReason={finish or 'なし'}"
+            if detail:
+                last_err += f", finishMessage={detail}"
+            last_err += "）"
+            continue
+        parts = cand.get("content", {}).get("parts") or []
+        story_text = "".join(
+            part.get("text", "")
+            for part in parts
+            if not part.get("thought")
+        ).strip()
+        if not story_text:
             last_err = f"本文が取得できませんでした（finishReason={finish}）"
             continue
-        if finish == "MAX_TOKENS":
-            last_err = "出力がトークン上限で打ち切られました"
+        missing = missing_story_sections(story_text, episode_number == 1)
+        if missing:
+            preview = story_text[:200].replace("\n", " ")
+            last_err = (
+                f"出力フォーマット不正（不足: {', '.join(missing)}）。"
+                f"応答先頭: {preview}"
+            )
             continue
-        return parts[0]["text"]
+        return story_text
     raise SystemExit(f"Gemini生成に{ATTEMPTS}回失敗しました。最後の理由: {last_err}")
 
 

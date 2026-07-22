@@ -42,6 +42,13 @@
   <script>
     var TOTAL_EPISODES = 5;
 
+    function fetchJson(path) {
+      return fetch(path, { cache: 'no-store' }).then(function (r) {
+        if (!r.ok) throw new Error(path + ': HTTP ' + r.status);
+        return r.json();
+      });
+    }
+
     function getParam(name) {
       var m = new RegExp('[?&]' + name + '=([^&]*)').exec(location.search);
       return m ? decodeURIComponent(m[1]) : null;
@@ -50,9 +57,9 @@
     // 作品IDは安定インデックス（?work=N）。連載中の作品は N = 完結済み作品数。
     // その作品が完結して書庫へ移っても N は変わらないため、同じURLで参照し続けられる。
     Promise.all([
-      fetch('bible.json', { cache: 'no-store' }).then(function (r) { return r.json(); }).catch(function () { return {}; }),
-      fetch('stories.json', { cache: 'no-store' }).then(function (r) { return r.json(); }).catch(function () { return []; }),
-      fetch('library.json', { cache: 'no-store' }).then(function (r) { return r.json(); }).catch(function () { return []; })
+      fetchJson('bible.json'),
+      fetchJson('stories.json'),
+      fetchJson('library.json')
     ])
       .then(function (results) {
         var bible = results[0] || {};

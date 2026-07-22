@@ -1,0 +1,364 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>物語エディタ（ローカル編集用）</title>
+  <style>
+    body {
+      font-family: 'Hiragino Sans', 'Noto Sans JP', sans-serif;
+      max-width: 820px;
+      margin: 0 auto;
+      padding: 24px 18px 80px;
+      line-height: 1.7;
+      color: #2c2c2c;
+      background: #fdf9f3;
+    }
+    h1 { font-size: 1.3em; color: #5a3e1b; border-bottom: 2px solid #c8a96e; padding-bottom: 8px; }
+    .note { font-size: 0.85em; color: #7a6a52; background: #fff7e9; border: 1px solid #e6d3ad; border-radius: 6px; padding: 10px 14px; }
+    .note code { background: #f1e6cf; padding: 0 4px; border-radius: 3px; }
+    .toolbar { position: sticky; top: 0; z-index: 10; background: #fdf9f3; padding: 10px 0; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; border-bottom: 1px solid #e6d3ad; }
+    button { font: inherit; cursor: pointer; border: 1px solid #c8a96e; background: #fff; color: #5a3e1b; border-radius: 6px; padding: 7px 12px; }
+    button:hover { background: #f7eed9; }
+    button.primary { background: #5a3e1b; color: #fff; border-color: #5a3e1b; }
+    button.primary:hover { background: #6f4d24; }
+    button.danger { color: #a33; border-color: #d8a; }
+    button:disabled { opacity: 0.45; cursor: not-allowed; }
+    #status { font-size: 0.85em; color: #777; margin-left: auto; }
+    .card { background: #fff; border-radius: 8px; box-shadow: 0 1px 5px rgba(0,0,0,0.07); padding: 16px 18px; margin-top: 18px; }
+    .card-head { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+    .ep-no { font-weight: bold; color: #c8a96e; }
+    .card-head .spacer { flex: 1; }
+    .row { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 10px; }
+    .row label { font-size: 0.8em; color: #7a6a52; display: block; margin-bottom: 3px; }
+    .row .field { flex: 1; min-width: 180px; }
+    input[type=text], textarea { width: 100%; box-sizing: border-box; font: inherit; border: 1px solid #ddd2bb; border-radius: 6px; padding: 8px 10px; background: #fffdf8; }
+    textarea { line-height: 1.9; min-height: 260px; resize: vertical; white-space: pre-wrap; }
+    .meta { font-size: 0.78em; color: #999; margin: 4px 0 10px; }
+    .preview { white-space: pre-wrap; background: #fbf7ef; border: 1px dashed #d8c79f; border-radius: 6px; padding: 14px 16px; margin-top: 8px; font-size: 1.0em; }
+    .preview rt { font-size: 0.55em; color: #666; }
+    .empty { color: #999; }
+    .hidden { display: none; }
+  </style>
+</head>
+<body>
+  <h1>📝 物語エディタ（ローカル編集用）</h1>
+  <p class="note">
+    このページは<strong>公開サイトには影響しません</strong>。手元で <code>stories.json</code> を直接編集するための管理用です。<br>
+    ① <strong>「フォルダを開く」</strong>でこのリポジトリのフォルダを選択 → 各話を編集 → <strong>「保存」</strong>で <code>stories.json</code> と <code>rss.xml</code> を上書き → あとは <code>git push</code> するだけ。<br>
+    ルビ記法：<code>漢字《よみ》</code>（漢字列に自動付与）／ <code>｜親文字《よみ》</code>（ひらがな等を含む親文字を明示）。
+  </p>
+
+  <div class="toolbar">
+    <button id="openBtn" class="primary">📂 フォルダを開く</button>
+    <button id="loadHttpBtn">🌐 HTTP経由で読み込み</button>
+    <button id="addBtn" disabled>＋ 話を追加</button>
+    <button id="saveBtn" class="primary" disabled>💾 保存（直接上書き）</button>
+    <button id="downloadBtn" disabled>⬇ ダウンロード</button>
+    <span id="status">未読み込み</span>
+  </div>
+
+  <div id="list"></div>
+
+<script>
+  var SITE_URL = "https://asapi-1999.github.io/ai-serial-story/";
+  var stories = [];
+  var bible = {};
+  var library = [];
+  var dirHandle = null;          // フォルダハンドル（File System Access API）
+  var supportsFs = !!window.showDirectoryPicker;
+
+  // ===== 公開サイト index.html と同じルビ描画ロジック =====
+  function renderStory(container, text) {
+    container.textContent = '';
+    var KANJI = '一-鿿々-〇ヶ';
+    var re = new RegExp('｜([^｜《》]+)《([^《》]+)》|([' + KANJI + ']+)《([^《》]+)》', 'g');
+    var last = 0, m;
+    while ((m = re.exec(text)) !== null) {
+      if (m.index > last) container.appendChild(document.createTextNode(text.slice(last, m.index)));
+      var base = m[1] !== undefined ? m[1] : m[3];
+      var reading = m[2] !== undefined ? m[2] : m[4];
+      var ruby = document.createElement('ruby');
+      ruby.appendChild(document.createTextNode(base));
+      var rt = document.createElement('rt');
+      rt.textContent = reading;
+      ruby.appendChild(rt);
+      container.appendChild(ruby);
+      last = re.lastIndex;
+    }
+    if (last < text.length) container.appendChild(document.createTextNode(text.slice(last)));
+  }
+
+  // ===== generate.py と同じ RSS 生成ロジック =====
+  function htmlEscape(s) {
+    return String(s)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#x27;');
+  }
+  function buildRss(list) {
+    var days = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+    var months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    var workIndex = library.length;
+    var channelTitle = bible.work_title || 'AI連載物語';
+    var items = '';
+    list.slice().reverse().forEach(function (s) {
+      var iso = s.iso || '1970-01-01';
+      var p = iso.split('-');
+      var wd = new Date(Date.UTC(+p[0], +p[1] - 1, +p[2])).getUTCDay();
+      var pub = days[wd] + ', ' + p[2] + ' ' + months[+p[1] - 1] + ' ' + p[0] + ' 00:00:00 +0900';
+      items += '\n    <item>' +
+        '\n      <title>第' + s.episode + '話 ' + htmlEscape(s.title) + '</title>' +
+        '\n      <link>' + SITE_URL + 'work.html?work=' + workIndex + '#ep' + s.episode + '</link>' +
+        '\n      <guid isPermaLink="false">w' + workIndex + '-ep-' + s.episode + '</guid>' +
+        '\n      <pubDate>' + pub + '</pubDate>' +
+        '\n      <description>' + htmlEscape(s.body) + '</description>' +
+        '\n    </item>';
+    });
+    return '<?xml version="1.0" encoding="UTF-8"?>\n' +
+      '<rss version="2.0">\n' +
+      '  <channel>\n' +
+      '    <title>' + htmlEscape(channelTitle) + '</title>\n' +
+      '    <link>' + SITE_URL + '</link>\n' +
+      '    <description>AIが毎週月曜に連載する全5話完結の物語</description>\n' +
+      '    <language>ja</language>' + items + '\n' +
+      '  </channel>\n' +
+      '</rss>';
+  }
+
+  // ===== 状態表示 =====
+  function setStatus(msg) { document.getElementById('status').textContent = msg; }
+  function enableEditing(on) {
+    document.getElementById('addBtn').disabled = !on;
+    document.getElementById('downloadBtn').disabled = !on;
+    document.getElementById('saveBtn').disabled = !(on && dirHandle);
+  }
+
+  // ===== 描画 =====
+  function renumber() { stories.forEach(function (s, i) { s.episode = i + 1; }); }
+
+  function render() {
+    renumber();
+    var list = document.getElementById('list');
+    list.textContent = '';
+    if (!stories.length) {
+      var e = document.createElement('p');
+      e.className = 'empty';
+      e.textContent = 'まだ話がありません。「＋ 話を追加」で作成してください。';
+      list.appendChild(e);
+      return;
+    }
+    stories.forEach(function (s, i) {
+      list.appendChild(buildCard(s, i));
+    });
+  }
+
+  function buildCard(s, i) {
+    var card = document.createElement('div');
+    card.className = 'card';
+
+    var head = document.createElement('div');
+    head.className = 'card-head';
+    var no = document.createElement('span');
+    no.className = 'ep-no';
+    no.textContent = '第' + s.episode + '話';
+    var spacer = document.createElement('span');
+    spacer.className = 'spacer';
+    var up = mkBtn('↑', function () { move(i, -1); });
+    var down = mkBtn('↓', function () { move(i, 1); });
+    up.disabled = (i === 0);
+    down.disabled = (i === stories.length - 1);
+    var del = mkBtn('🗑 削除', function () {
+      if (confirm('第' + s.episode + '話「' + s.title + '」を削除します。よろしいですか？')) {
+        stories.splice(i, 1); render();
+      }
+    });
+    del.className = 'danger';
+    head.append(no, spacer, up, down, del);
+    card.appendChild(head);
+
+    // タイトル・日付・iso
+    var row = document.createElement('div');
+    row.className = 'row';
+    row.appendChild(field('タイトル（話数は含めない）', s.title, function (v) { s.title = v; no.textContent = '第' + s.episode + '話'; }));
+    row.appendChild(field('更新日（表示用）', s.date, function (v) { s.date = v; }, '例：2026年06月05日'));
+    row.appendChild(field('日付（iso・RSS用）', s.iso, function (v) { s.iso = v; }, '例：2026-06-05'));
+    card.appendChild(row);
+
+    // 本文
+    var blabel = document.createElement('label');
+    blabel.textContent = '本文';
+    blabel.style.fontSize = '0.8em';
+    blabel.style.color = '#7a6a52';
+    card.appendChild(blabel);
+    var ta = document.createElement('textarea');
+    ta.value = s.body;
+    card.appendChild(ta);
+
+    var meta = document.createElement('div');
+    meta.className = 'meta';
+    function updateMeta() { meta.textContent = '本文 ' + ta.value.length + ' 字'; }
+    updateMeta();
+    card.appendChild(meta);
+
+    // プレビュー
+    var pvBtn = mkBtn('👁 プレビュー表示', null);
+    card.appendChild(pvBtn);
+    var pv = document.createElement('div');
+    pv.className = 'preview hidden';
+    card.appendChild(pv);
+    pvBtn.addEventListener('click', function () {
+      pv.classList.toggle('hidden');
+      if (!pv.classList.contains('hidden')) { renderStory(pv, ta.value); pvBtn.textContent = '🙈 プレビューを隠す'; }
+      else { pvBtn.textContent = '👁 プレビュー表示'; }
+    });
+
+    ta.addEventListener('input', function () {
+      s.body = ta.value;
+      updateMeta();
+      if (!pv.classList.contains('hidden')) renderStory(pv, ta.value);
+    });
+
+    return card;
+  }
+
+  function field(labelText, value, onInput, placeholder) {
+    var wrap = document.createElement('div');
+    wrap.className = 'field';
+    var lab = document.createElement('label');
+    lab.textContent = labelText;
+    var inp = document.createElement('input');
+    inp.type = 'text';
+    inp.value = value || '';
+    if (placeholder) inp.placeholder = placeholder;
+    inp.addEventListener('input', function () { onInput(inp.value); });
+    wrap.append(lab, inp);
+    return wrap;
+  }
+
+  function mkBtn(text, onClick) {
+    var b = document.createElement('button');
+    b.textContent = text;
+    if (onClick) b.addEventListener('click', onClick);
+    return b;
+  }
+
+  function move(i, dir) {
+    var j = i + dir;
+    if (j < 0 || j >= stories.length) return;
+    var tmp = stories[i]; stories[i] = stories[j]; stories[j] = tmp;
+    render();
+  }
+
+  // ===== 読み込み =====
+  async function readJsonFile(name) {
+    var fh = await dirHandle.getFileHandle(name);
+    var file = await fh.getFile();
+    return JSON.parse(await file.text());
+  }
+
+  function fetchJson(path) {
+    return fetch(path, { cache: 'no-store' }).then(function (r) {
+      if (!r.ok) throw new Error(path + ': HTTP ' + r.status);
+      return r.json();
+    });
+  }
+
+  function useLoadedData(loaded) {
+    if (!Array.isArray(loaded[0])) throw new Error('stories.json のルートは配列である必要があります');
+    if (!loaded[1] || Array.isArray(loaded[1]) || typeof loaded[1] !== 'object') {
+      throw new Error('bible.json のルートはオブジェクトである必要があります');
+    }
+    if (!Array.isArray(loaded[2])) throw new Error('library.json のルートは配列である必要があります');
+    stories = loaded[0];
+    bible = loaded[1];
+    library = loaded[2];
+  }
+
+  document.getElementById('openBtn').addEventListener('click', async function () {
+    if (!supportsFs) { alert('このブラウザはフォルダ直接編集に未対応です。Chrome / Edge をお使いください。「HTTP経由で読み込み」＋「ダウンロード」をご利用ください。'); return; }
+    try {
+      dirHandle = await window.showDirectoryPicker();
+      var loaded = await Promise.all([
+        readJsonFile('stories.json'),
+        readJsonFile('bible.json'),
+        readJsonFile('library.json')
+      ]);
+      useLoadedData(loaded);
+      render();
+      enableEditing(true);
+      setStatus('読み込み完了（' + stories.length + '話）／フォルダ：' + dirHandle.name);
+    } catch (err) {
+      if (err && err.name === 'AbortError') return;
+      alert('読み込みに失敗しました：' + err);
+    }
+  });
+
+  document.getElementById('loadHttpBtn').addEventListener('click', function () {
+    Promise.all([
+      fetchJson('stories.json'),
+      fetchJson('bible.json'),
+      fetchJson('library.json')
+    ])
+      .then(function (loaded) {
+        useLoadedData(loaded);
+        dirHandle = null;
+        render(); enableEditing(true);
+        setStatus('HTTP読み込み完了（' + stories.length + '話）／保存はダウンロードのみ');
+      })
+      .catch(function (e) { alert('読み込み失敗：' + e + '\n（このHTMLをHTTPサーバー経由で開いているか確認してください）'); });
+  });
+
+  // ===== 追加 =====
+  document.getElementById('addBtn').addEventListener('click', function () {
+    stories.push({ episode: stories.length + 1, title: '新しい話', date: '', iso: '', body: '' });
+    render();
+  });
+
+  // ===== 保存（直接上書き）=====
+  document.getElementById('saveBtn').addEventListener('click', async function () {
+    if (!dirHandle) { alert('フォルダが開かれていません。'); return; }
+    renumber();
+    try {
+      await writeFile('stories.json', JSON.stringify(stories, null, 2));
+      await writeFile('rss.xml', buildRss(stories));
+      setStatus('保存しました ✅（stories.json / rss.xml を上書き）— git push してください');
+    } catch (err) {
+      alert('保存に失敗しました：' + err);
+    }
+  });
+
+  async function writeFile(name, content) {
+    var fh = await dirHandle.getFileHandle(name, { create: true });
+    var w = await fh.createWritable();
+    await w.write(content);
+    await w.close();
+  }
+
+  // ===== ダウンロード（フォルダ未対応ブラウザ向けフォールバック）=====
+  document.getElementById('downloadBtn').addEventListener('click', function () {
+    renumber();
+    download('stories.json', JSON.stringify(stories, null, 2), 'application/json');
+    download('rss.xml', buildRss(stories), 'application/xml');
+    setStatus('ダウンロードしました ⬇（リポジトリ内のファイルを差し替えて git push）');
+  });
+
+  function download(name, content, mime) {
+    var blob = new Blob([content], { type: mime + ';charset=utf-8' });
+    var a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(function () { URL.revokeObjectURL(a.href); }, 1000);
+  }
+
+  if (!supportsFs) {
+    document.getElementById('openBtn').title = 'このブラウザは未対応';
+  }
+</script>
+</body>
+</html>
