@@ -64,6 +64,14 @@
   var SITE_URL = '';
   var TOTAL_EPISODES = 0;
   var MIN_BODY_LENGTH = 600;
+  var SERIES_METADATA_KEYS = [
+    'genre',
+    'style_guide',
+    'themes',
+    'episode_plan',
+    'open_threads',
+    'character_states'
+  ];
   var stories = [];
   var bible = {};
   var library = [];
@@ -381,7 +389,55 @@
           throw new Error('登場人物' + (i + 1) + 'の名前または説明が不正です');
         }
       });
+      validateSeriesMetadata();
     }
+  }
+
+  function validateSeriesMetadata() {
+    var hasMetadata = SERIES_METADATA_KEYS.some(function (key) {
+      return Object.prototype.hasOwnProperty.call(bible, key);
+    });
+    if (!hasMetadata) return;
+    if (typeof bible.genre !== 'string' || !bible.genre.trim()
+        || typeof bible.style_guide !== 'string' || !bible.style_guide.trim()) {
+      throw new Error('ジャンルまたは文体指針が不正です');
+    }
+    if (!Array.isArray(bible.themes) || !bible.themes.length
+        || bible.themes.some(function (value) {
+          return typeof value !== 'string' || !value.trim();
+        })) {
+      throw new Error('テーマが不正です');
+    }
+    if (!Array.isArray(bible.episode_plan)
+        || bible.episode_plan.length !== TOTAL_EPISODES) {
+      throw new Error('全話構成は全' + TOTAL_EPISODES + '話分必要です');
+    }
+    bible.episode_plan.forEach(function (plan, i) {
+      if (!plan || plan.episode !== i + 1
+          || typeof plan.outline !== 'string' || !plan.outline.trim()) {
+        throw new Error('全話構成の第' + (i + 1) + '話が不正です');
+      }
+    });
+    if (!Array.isArray(bible.open_threads)
+        || bible.open_threads.some(function (value) {
+          return typeof value !== 'string' || !value.trim();
+        })) {
+      throw new Error('未回収要素が不正です');
+    }
+    if (!Array.isArray(bible.character_states) || !bible.character_states.length) {
+      throw new Error('人物状態が設定されていません');
+    }
+    var names = Object.create(null);
+    bible.character_states.forEach(function (state, i) {
+      if (!state || typeof state.name !== 'string' || !state.name.trim()
+          || typeof state.state !== 'string' || !state.state.trim()) {
+        throw new Error('人物状態' + (i + 1) + 'が不正です');
+      }
+      if (names[state.name.trim()]) {
+        throw new Error('人物状態に同じ人物が重複しています');
+      }
+      names[state.name.trim()] = true;
+    });
   }
 
   document.getElementById('openBtn').addEventListener('click', async function () {

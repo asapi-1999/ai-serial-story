@@ -13,7 +13,9 @@ from generate import (
     ATTEMPTS,
     JST,
     MIN_BODY_LENGTH,
+    SERIES_METADATA_KEYS,
     atomic_write_files,
+    build_prompt,
     build_rss,
     fetch_story,
     generate_updates,
@@ -31,11 +33,32 @@ CONFIG = {
 
 VALID_BODY = "物語の本文です。" * 100
 
+
+def series_metadata():
+    return {
+        "genre": "幻想ミステリー",
+        "style_guide": (
+            "三人称限定視点・過去形。端正な語彙と緩急ある文で描き、"
+            "会話は抑制的にする。静かな不穏さを保つ。"
+        ),
+        "themes": ["記憶と選択", "信頼の回復"],
+        "episode_plan": [
+            {"episode": number, "outline": f"第{number}話の主要展開"}
+            for number in range(1, CONFIG["total_episodes"] + 1)
+        ],
+        "open_threads": ["失われた鍵の正体"],
+        "character_states": [
+            {"name": "主人公", "state": "失われた鍵の手掛かりを追っている"},
+        ],
+    }
+
+
 CONTINUATION = {
     "title": "続きの題",
     "body": VALID_BODY,
     "summary": "続きの要約",
     "new_characters": [],
+    **series_metadata(),
 }
 
 FIRST_EPISODE = {
@@ -47,6 +70,7 @@ FIRST_EPISODE = {
     "characters": [
         {"name": "主人公", "description": "物語の主人公。"},
     ],
+    **series_metadata(),
 }
 
 
@@ -75,11 +99,21 @@ def api_response(text, finish_reason="STOP"):
 
 class StructuredOutputTests(unittest.TestCase):
     def test_first_episode_schema_requires_series_metadata(self):
-        schema = story_response_schema(True)
+        schema = story_response_schema(True, CONFIG["total_episodes"])
         self.assertEqual(
             schema["required"],
-            ["work_title", "title", "body", "summary", "world", "characters"],
+            [
+                "work_title",
+                "title",
+                "body",
+                "summary",
+                "world",
+                "characters",
+                *SERIES_METADATA_KEYS,
+            ],
         )
+        self.assertEqual(schema["properties"]["episode_plan"]["minItems"], 5)
+        self.assertEqual(schema["properties"]["episode_plan"]["maxItems"], 5)
         self.assertFalse(schema["additionalProperties"])
 
     def test_payload_validation_rejects_empty_body(self):
@@ -98,6 +132,14 @@ class StructuredOutputTests(unittest.TestCase):
             validate_story_payload(story, False),
         )
 
+    def test_payload_validation_rejects_incomplete_episode_plan(self):
+        story = copy.deepcopy(CONTINUATION)
+        story["episode_plan"].pop()
+        self.assertIn(
+            "応答.episode_plan は全5話分必要です",
+            validate_story_payload(story, False, 5),
+        )
+
     def test_fetch_story_retries_invalid_json_and_safety_stop(self):
         responses = iter([
             api_response("not-json"),
@@ -113,6 +155,12 @@ class StructuredOutputTests(unittest.TestCase):
             self.assertEqual(generation_config["responseMimeType"], "application/json")
             self.assertIn("responseJsonSchema", generation_config)
             self.assertEqual(
+                generation_config["responseJsonSchema"]["properties"][
+                    "episode_plan"
+                ]["maxItems"],
+                CONFIG["total_episodes"],
+            )
+            self.assertEqual(
                 generation_config["thinkingConfig"],
                 {"thinkingLevel": "medium"},
             )
@@ -122,6 +170,7 @@ class StructuredOutputTests(unittest.TestCase):
             "prompt",
             False,
             "test-key",
+            total_episodes=CONFIG["total_episodes"],
             urlopen=urlopen,
             sleep=waits.append,
         )
@@ -242,7 +291,7 @@ class GenerationTests(unittest.TestCase):
             self.stories,
             self.bible,
             [],
-            lambda prompt, first: copy.deepcopy(CONTINUATION),
+            lambda prompt, first, total: copy.deepcopy(CONTINUATION),
             self.now,
         )
 
@@ -250,7 +299,51 @@ class GenerationTests(unittest.TestCase):
         self.assertEqual(self.bible, original_bible)
         self.assertEqual(len(updates["stories"]), 2)
         self.assertEqual(updates["stories"][-1]["title"], "続きの題")
+        self.assertEqual(updates["bible"]["genre"], "幻想ミステリー")
+        self.assertEqual(len(updates["bible"]["episode_plan"]), 5)
         self.assertIn("w0-ep-2", updates["rss"])
+
+    def test_continuation_preserves_existing_static_metadata(self):
+        self.bible.update(series_metadata())
+        generated = copy.deepcopy(CONTINUATION)
+        generated["genre"] = "別ジャンル"
+        generated["style_guide"] = "別の文体"
+        generated["themes"] = ["別テーマ"]
+        generated["episode_plan"][0]["outline"] = "書き換えられた構成"
+        generated["open_threads"] = ["新しい未回収要素"]
+
+        updates = generate_updates(
+            CONFIG,
+            self.stories,
+            self.bible,
+            [],
+            lambda prompt, first, total: generated,
+            self.now,
+        )
+
+        self.assertEqual(updates["bible"]["genre"], "幻想ミステリー")
+        self.assertEqual(
+            updates["bible"]["episode_plan"][0]["outline"],
+            "第1話の主要展開",
+        )
+        self.assertEqual(
+            updates["bible"]["open_threads"],
+            ["新しい未回収要素"],
+        )
+
+    def test_continuation_prompt_requests_legacy_metadata_enrichment(self):
+        prompt = build_prompt(
+            2,
+            CONFIG["total_episodes"],
+            "2026年07月23日",
+            self.bible,
+            self.stories,
+        )
+
+        self.assertIn("既存本文と設定から推定し、今回の応答で補完", prompt)
+        self.assertIn("## 全話構成", prompt)
+        self.assertIn("人物の行動・会話・感覚描写", prompt)
+        self.assertIn("各話で人物に意味のある選択", prompt)
 
     def test_new_work_archives_completed_work(self):
         completed_stories = []
@@ -271,7 +364,7 @@ class GenerationTests(unittest.TestCase):
             completed_stories,
             completed_bible,
             [],
-            lambda prompt, first: copy.deepcopy(FIRST_EPISODE),
+            lambda prompt, first, total: copy.deepcopy(FIRST_EPISODE),
             self.now,
         )
 
@@ -284,7 +377,7 @@ class GenerationTests(unittest.TestCase):
     def test_generation_failure_does_not_mutate_inputs(self):
         original_stories = copy.deepcopy(self.stories)
 
-        def fail(prompt, first):
+        def fail(prompt, first, total_episodes):
             raise SystemExit("generation failed")
 
         with self.assertRaisesRegex(SystemExit, "generation failed"):
@@ -317,7 +410,7 @@ class GenerationTests(unittest.TestCase):
                 stories,
                 bible,
                 [],
-                lambda prompt, first: copy.deepcopy(FIRST_EPISODE),
+                lambda prompt, first, total: copy.deepcopy(FIRST_EPISODE),
                 self.now,
             )
 
@@ -340,6 +433,11 @@ class StateValidationTests(unittest.TestCase):
 
     def test_validate_state_accepts_complete_state(self):
         validate_state(self.stories, self.bible, [])
+
+    def test_validate_state_rejects_partial_series_metadata(self):
+        self.bible["genre"] = "ミステリー"
+        with self.assertRaisesRegex(SystemExit, "style_guide"):
+            validate_state(self.stories, self.bible, [])
 
     def test_validate_state_rejects_invalid_iso_date(self):
         self.stories[0]["iso"] = "2026-02-30"

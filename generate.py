@@ -23,6 +23,14 @@ MODEL_OPTIONS = (
     ("gemini-2.5-flash", {"thinkingBudget": 2048}),
 )
 FALLBACK_HTTP_CODES = frozenset({404, 408, 429, 500, 502, 503, 504})
+SERIES_METADATA_KEYS = (
+    "genre",
+    "style_guide",
+    "themes",
+    "episode_plan",
+    "open_threads",
+    "character_states",
+)
 
 RUBY_GUIDE = (
     "・難読な漢字・固有名詞・印象づけたい語にはルビ（ふりがな）を振ってよい。\n"
@@ -33,9 +41,28 @@ RUBY_GUIDE = (
     "  ・ルビは多用せず、効果的な箇所に絞ること。\n"
 )
 
+PROSE_GUIDE = (
+    "・説明だけで進めず、人物の行動・会話・感覚描写を通して場面を描くこと\n"
+    "・同じ語尾・比喩・前話の要約を繰り返さず、文の長短とリズムに変化をつけること\n"
+    "・会話・行動・情景描写の比率を場面に応じて調整し、必要な余韻を残すこと\n"
+    "・各話で人物に意味のある選択、発見、関係性または状況の変化を起こすこと\n"
+    "・設定を一度に説明せず、物語上必要な情報を場面の中で自然に明かすこと\n"
+)
+
 
 def fresh_bible():
-    return {"work_title": "", "world": "", "characters": [], "synopsis": []}
+    return {
+        "work_title": "",
+        "world": "",
+        "characters": [],
+        "synopsis": [],
+        "genre": "",
+        "style_guide": "",
+        "themes": [],
+        "episode_plan": [],
+        "open_threads": [],
+        "character_states": [],
+    }
 
 
 def is_valid_iso_date(value):
@@ -92,6 +119,76 @@ def episode_list_errors(episodes, path):
     return errors
 
 
+def series_metadata_errors(data, path, total_episodes=None, allow_legacy=False):
+    if allow_legacy and not any(key in data for key in SERIES_METADATA_KEYS):
+        return []
+
+    errors = []
+    for key in ("genre", "style_guide"):
+        value = data.get(key)
+        if not isinstance(value, str) or not value.strip():
+            errors.append(f"{path}.{key} は空でない文字列である必要があります")
+
+    for key, allow_empty in (("themes", False), ("open_threads", True)):
+        values = data.get(key)
+        if not isinstance(values, list):
+            errors.append(f"{path}.{key} は配列である必要があります")
+            continue
+        if not allow_empty and not values:
+            errors.append(f"{path}.{key} は空にできません")
+        for index, value in enumerate(values):
+            if not isinstance(value, str) or not value.strip():
+                errors.append(f"{path}.{key}[{index}] は空でない文字列である必要があります")
+
+    episode_plan = data.get("episode_plan")
+    if not isinstance(episode_plan, list):
+        errors.append(f"{path}.episode_plan は配列である必要があります")
+    else:
+        if not episode_plan:
+            errors.append(f"{path}.episode_plan は空にできません")
+        if total_episodes is not None and len(episode_plan) != total_episodes:
+            errors.append(
+                f"{path}.episode_plan は全{total_episodes}話分必要です"
+            )
+        for index, plan in enumerate(episode_plan):
+            item_path = f"{path}.episode_plan[{index}]"
+            if not isinstance(plan, dict):
+                errors.append(f"{item_path} はオブジェクトである必要があります")
+                continue
+            episode = plan.get("episode")
+            if isinstance(episode, bool) or not isinstance(episode, int):
+                errors.append(f"{item_path}.episode は整数である必要があります")
+            elif episode != index + 1:
+                errors.append(f"{item_path}.episode は {index + 1} である必要があります")
+            outline = plan.get("outline")
+            if not isinstance(outline, str) or not outline.strip():
+                errors.append(f"{item_path}.outline は空でない文字列である必要があります")
+
+    character_states = data.get("character_states")
+    if not isinstance(character_states, list):
+        errors.append(f"{path}.character_states は配列である必要があります")
+    else:
+        if not character_states:
+            errors.append(f"{path}.character_states は空にできません")
+        names = set()
+        for index, state in enumerate(character_states):
+            item_path = f"{path}.character_states[{index}]"
+            if not isinstance(state, dict):
+                errors.append(f"{item_path} はオブジェクトである必要があります")
+                continue
+            for key in ("name", "state"):
+                value = state.get(key)
+                if not isinstance(value, str) or not value.strip():
+                    errors.append(f"{item_path}.{key} は空でない文字列である必要があります")
+            name = state.get("name")
+            if isinstance(name, str) and name.strip():
+                normalized_name = name.strip()
+                if normalized_name in names:
+                    errors.append(f"{path}.character_states に人物名の重複があります: {normalized_name}")
+                names.add(normalized_name)
+    return errors
+
+
 def validate_state(stories, bible, library):
     errors = []
     if not isinstance(stories, list):
@@ -102,6 +199,15 @@ def validate_state(stories, bible, library):
         errors.append("library.json のルートは配列である必要があります")
     if errors:
         raise SystemExit("保存データが不正です:\n- " + "\n- ".join(errors))
+
+    if stories:
+        errors.extend(
+            series_metadata_errors(
+                bible,
+                "bible.json",
+                allow_legacy=True,
+            )
+        )
 
     errors.extend(episode_list_errors(stories, "stories.json"))
 
@@ -186,7 +292,82 @@ def person_schema():
     }
 
 
-def story_response_schema(first_episode):
+def character_state_schema():
+    return {
+        "type": "object",
+        "properties": {
+            "name": {
+                "type": "string",
+                "description": "人物名",
+            },
+            "state": {
+                "type": "string",
+                "description": "今回の話終了時点の目的・感情・関係性・居場所を簡潔に記述",
+            },
+        },
+        "required": ["name", "state"],
+        "additionalProperties": False,
+    }
+
+
+def episode_plan_schema(total_episodes):
+    schema = {
+        "type": "array",
+        "description": "連載全話の構成案。各話の役割と主要な展開を記述",
+        "items": {
+            "type": "object",
+            "properties": {
+                "episode": {
+                    "type": "integer",
+                    "description": "1から始まる話数",
+                },
+                "outline": {
+                    "type": "string",
+                    "description": "この話で進める対立・発見・転換を1〜2文で記述",
+                },
+            },
+            "required": ["episode", "outline"],
+            "additionalProperties": False,
+        },
+        "minItems": total_episodes or 1,
+    }
+    if total_episodes is not None:
+        schema["maxItems"] = total_episodes
+    return schema
+
+
+def series_metadata_schema(total_episodes):
+    return {
+        "genre": {
+            "type": "string",
+            "description": "作品の中心ジャンルと、必要なら副ジャンル",
+        },
+        "style_guide": {
+            "type": "string",
+            "description": "視点・時制・語彙・文章リズム・会話量・雰囲気を再現できる文体指針",
+        },
+        "themes": {
+            "type": "array",
+            "description": "作品を通して扱う中心テーマ",
+            "items": {"type": "string"},
+            "minItems": 1,
+        },
+        "episode_plan": episode_plan_schema(total_episodes),
+        "open_threads": {
+            "type": "array",
+            "description": "今回終了時点で未回収の伏線・謎・約束。最終話ですべて解決した場合は空配列",
+            "items": {"type": "string"},
+        },
+        "character_states": {
+            "type": "array",
+            "description": "主要人物それぞれの今回終了時点の状態",
+            "items": character_state_schema(),
+            "minItems": 1,
+        },
+    }
+
+
+def story_response_schema(first_episode, total_episodes=None):
     common = {
         "title": {
             "type": "string",
@@ -201,6 +382,7 @@ def story_response_schema(first_episode):
             "description": "今回の話の内容を1文で要約した文章",
         },
     }
+    metadata = series_metadata_schema(total_episodes)
     if first_episode:
         properties = {
             "work_title": {
@@ -218,8 +400,17 @@ def story_response_schema(first_episode):
                 "items": person_schema(),
                 "minItems": 1,
             },
+            **metadata,
         }
-        required = ["work_title", "title", "body", "summary", "world", "characters"]
+        required = [
+            "work_title",
+            "title",
+            "body",
+            "summary",
+            "world",
+            "characters",
+            *SERIES_METADATA_KEYS,
+        ]
     else:
         properties = {
             **common,
@@ -228,8 +419,15 @@ def story_response_schema(first_episode):
                 "description": "今回新たに登場した人物。いなければ空配列",
                 "items": person_schema(),
             },
+            **metadata,
         }
-        required = ["title", "body", "summary", "new_characters"]
+        required = [
+            "title",
+            "body",
+            "summary",
+            "new_characters",
+            *SERIES_METADATA_KEYS,
+        ]
 
     return {
         "type": "object",
@@ -240,7 +438,7 @@ def story_response_schema(first_episode):
     }
 
 
-def validate_story_payload(story, first_episode):
+def validate_story_payload(story, first_episode, total_episodes=None):
     if not isinstance(story, dict):
         return ["応答のルートがオブジェクトではありません"]
 
@@ -250,6 +448,13 @@ def validate_story_payload(story, first_episode):
         required_strings.extend(["work_title", "world"])
 
     errors = []
+    errors.extend(
+        series_metadata_errors(
+            story,
+            "応答",
+            total_episodes=total_episodes,
+        )
+    )
     for key in required_strings:
         value = story.get(key)
         if not isinstance(value, str) or not value.strip():
@@ -276,6 +481,32 @@ def validate_story_payload(story, first_episode):
     return errors
 
 
+def format_string_list(values, empty_text):
+    if not isinstance(values, list) or not values:
+        return empty_text
+    return "\n".join(f"・{value}" for value in values)
+
+
+def format_episode_plan(plans, empty_text):
+    if not isinstance(plans, list) or not plans:
+        return empty_text
+    return "\n".join(
+        f"・第{plan.get('episode', '?')}話：{plan.get('outline', '')}"
+        for plan in plans
+        if isinstance(plan, dict)
+    ) or empty_text
+
+
+def format_character_states(states, empty_text):
+    if not isinstance(states, list) or not states:
+        return empty_text
+    return "\n".join(
+        f"・{state.get('name', '不明')}：{state.get('state', '')}"
+        for state in states
+        if isinstance(state, dict)
+    ) or empty_text
+
+
 def build_prompt(episode_number, total_episodes, today, bible, stories):
     if episode_number == 1:
         return (
@@ -285,21 +516,40 @@ def build_prompt(episode_number, total_episodes, today, bible, stories):
             "・ジャンルは自由（ファンタジー／SF／ミステリー／恋愛／ホラー／歴史／日常など何でも可）。"
             "今回の作品のジャンルと作風を自由に選ぶこと\n"
             "・独自の世界観とメインキャラクターを設定すること\n"
+            f"・執筆前に全{total_episodes}話の役割と主要展開を設計し、episode_planに"
+            f"第1話から第{total_episodes}話まで順番に記録すること\n"
+            "・genre、style_guide、themesは以後の全話で維持できる具体性を持たせること。"
+            "style_guideには視点・時制・語彙・文のリズム・会話量・雰囲気を含めること\n"
             f"・全{total_episodes}話で物語が完結する構成を念頭に、第1話では世界観と"
             "物語の核となる謎・目的を提示すること\n"
             "・続きが気になる終わり方にすること\n"
-            "・日本語で1000字程度\n"
+            "・open_threadsには第1話終了時点の未回収要素を、character_statesには"
+            "主要人物全員の現在地・感情・関係性を記録すること\n"
+            + PROSE_GUIDE
+            + "・日本語で1000字程度\n"
             "・作品タイトルと今回のタイトルのどちらにも話数を含めないこと\n"
             + RUBY_GUIDE
             + f"・更新日：{today}\n"
-            "・指定されたJSON Schemaの各項目を、物語の内容に合わせて埋めること"
+            "・指定されたJSON Schemaの各項目を、物語の内容に合わせて埋めること\n"
+            "・JSONの管理情報は本文中に箇条書きや説明文として露出させないこと"
         )
 
+    legacy_text = "（未設定。既存本文と設定から推定し、今回の応答で補完すること）"
     chars = "\n".join(
         f"・{person['name']}：{person['desc']}"
         for person in bible.get("characters", [])
     ) or "（未設定）"
     synopsis = "\n".join(bible.get("synopsis", [])) or "（なし）"
+    themes = format_string_list(bible.get("themes"), legacy_text)
+    episode_plan = format_episode_plan(bible.get("episode_plan"), legacy_text)
+    open_threads = format_string_list(
+        bible.get("open_threads"),
+        "（なし。未設定の場合は既存本文から推定して補完すること）",
+    )
+    character_states = format_character_states(
+        bible.get("character_states"),
+        legacy_text,
+    )
     recent = "".join(
         f"第{story['episode']}話「{story['title']}」\n{story['body']}\n\n"
         for story in stories[-2:]
@@ -323,19 +573,33 @@ def build_prompt(episode_number, total_episodes, today, bible, stories):
         "# これまでの設定\n"
         f"## 世界観\n{bible.get('world') or '（未設定）'}\n\n"
         f"## 登場人物\n{chars}\n\n"
+        f"## ジャンル\n{bible.get('genre') or legacy_text}\n\n"
+        f"## 文体指針\n{bible.get('style_guide') or legacy_text}\n\n"
+        f"## テーマ\n{themes}\n\n"
+        f"## 全話構成\n{episode_plan}\n\n"
+        f"## 未回収の要素\n{open_threads}\n\n"
+        f"## 人物の現在状態\n{character_states}\n\n"
         f"## あらすじ（各話1行）\n{synopsis}\n\n"
         f"# 直近のエピソード（全文）\n{recent}"
         "---\n"
         f"上記の続きとなる第{episode_number}話（全{total_episodes}話）を書いてください。\n"
         "以下の条件を守ってください：\n"
         "・これまでのジャンル・作風・世界観・登場人物を引き継ぐこと\n"
+        "・genre、style_guide、themes、episode_planは既存値を変更せず、そのまま応答に含めること。"
+        "未設定の場合だけ既存本文から推定して全項目を補完すること\n"
+        "・episode_planにおける今回の役割を果たし、前後の話の役割を先取りしすぎないこと\n"
+        "・open_threadsは今回回収した要素を除き、新たに生じた未回収要素を加えること。"
+        "最終話ではすべて回収して空配列にすること\n"
+        "・character_statesは今回終了時点の主要人物全員の状態に更新すること\n"
         "・直近のエピソードの終わりから自然につながること\n"
+        + PROSE_GUIDE
         + ending_rule
         + "・日本語で1000字程度\n"
         f"・タイトルに「第{episode_number}話」などの話数を含めないこと\n"
         + RUBY_GUIDE
         + f"・更新日：{today}\n"
-        "・指定されたJSON Schemaの各項目を、今回の物語の内容に合わせて埋めること"
+        "・指定されたJSON Schemaの各項目を、今回の物語の内容に合わせて埋めること\n"
+        "・JSONの管理情報は本文中に箇条書きや説明文として露出させないこと"
     )
 
 
@@ -343,6 +607,7 @@ def fetch_story(
     prompt_text,
     first_episode,
     api_key,
+    total_episodes=None,
     urlopen=urllib.request.urlopen,
     sleep=time.sleep,
 ):
@@ -357,7 +622,10 @@ def fetch_story(
                 "maxOutputTokens": 12000,
                 "thinkingConfig": thinking_config,
                 "responseMimeType": "application/json",
-                "responseJsonSchema": story_response_schema(first_episode),
+                "responseJsonSchema": story_response_schema(
+                    first_episode,
+                    total_episodes,
+                ),
             },
         }, ensure_ascii=False).encode("utf-8")
         url = (
@@ -456,7 +724,11 @@ def fetch_story(
             except json.JSONDecodeError as exc:
                 last_err = f"構造化出力のJSON解析失敗: {exc}"
                 continue
-            errors = validate_story_payload(story, first_episode)
+            errors = validate_story_payload(
+                story,
+                first_episode,
+                total_episodes,
+            )
             if errors:
                 last_err = "構造化出力が不正: " + "; ".join(errors)
                 continue
@@ -504,6 +776,31 @@ def convert_people(people):
     ]
 
 
+def apply_series_metadata(bible, generated, preserve_static):
+    if not preserve_static:
+        for key in ("genre", "style_guide"):
+            bible[key] = generated[key].strip()
+        bible["themes"] = [value.strip() for value in generated["themes"]]
+        bible["episode_plan"] = [
+            {
+                "episode": plan["episode"],
+                "outline": plan["outline"].strip(),
+            }
+            for plan in generated["episode_plan"]
+        ]
+
+    bible["open_threads"] = [
+        value.strip() for value in generated["open_threads"]
+    ]
+    bible["character_states"] = [
+        {
+            "name": state["name"].strip(),
+            "state": state["state"].strip(),
+        }
+        for state in generated["character_states"]
+    ]
+
+
 def build_rss(site_url, total_episodes, stories, bible, library):
     work_index = len(library)
     items = ""
@@ -542,6 +839,18 @@ def build_rss(site_url, total_episodes, stories, bible, library):
 def generate_updates(config, stories, bible, library, generate_content, now):
     validate_state(stories, bible, library)
     total_episodes, site_url = validate_config(config)
+    metadata_errors = []
+    if stories:
+        metadata_errors = series_metadata_errors(
+            bible,
+            "bible.json",
+            total_episodes=total_episodes,
+            allow_legacy=True,
+        )
+    if metadata_errors:
+        raise SystemExit(
+            "保存データが不正です:\n- " + "\n- ".join(metadata_errors)
+        )
     if len(stories) > total_episodes:
         raise SystemExit(
             f"stories.json が設定上限の全{total_episodes}話を超えています。"
@@ -570,6 +879,9 @@ def generate_updates(config, stories, bible, library, generate_content, now):
         bible = fresh_bible()
         episode_number = 1
 
+    preserve_static_metadata = (
+        episode_number != 1 and bool(bible.get("genre"))
+    )
     prompt = build_prompt(
         episode_number,
         total_episodes,
@@ -577,8 +889,16 @@ def generate_updates(config, stories, bible, library, generate_content, now):
         bible,
         stories,
     )
-    generated = generate_content(prompt, episode_number == 1)
-    errors = validate_story_payload(generated, episode_number == 1)
+    generated = generate_content(
+        prompt,
+        episode_number == 1,
+        total_episodes,
+    )
+    errors = validate_story_payload(
+        generated,
+        episode_number == 1,
+        total_episodes,
+    )
     if errors:
         raise SystemExit("生成結果が不正: " + "; ".join(errors))
 
@@ -598,6 +918,11 @@ def generate_updates(config, stories, bible, library, generate_content, now):
                 bible.setdefault("characters", []).append(person)
                 existing.add(person["name"])
 
+    apply_series_metadata(
+        bible,
+        generated,
+        preserve_static_metadata,
+    )
     bible.setdefault("synopsis", []).append(
         f"第{episode_number}話「{title}」：{summary}"
     )
@@ -720,10 +1045,11 @@ def main():
         stories,
         bible,
         library,
-        lambda prompt, first_episode: fetch_story(
+        lambda prompt, first_episode, total_episodes: fetch_story(
             prompt,
             first_episode,
             api_key,
+            total_episodes,
         ),
         datetime.datetime.now(JST),
     )
