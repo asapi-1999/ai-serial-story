@@ -1,21 +1,27 @@
 import copy
 import datetime
 import json
+import os
 import tempfile
 import unittest
 import urllib.error
+import xml.etree.ElementTree as ET
 from pathlib import Path
 from unittest import mock
 
 from generate import (
     ATTEMPTS,
     JST,
+    MIN_BODY_LENGTH,
     atomic_write_files,
+    build_rss,
     fetch_story,
     generate_updates,
     story_response_schema,
+    validate_state,
     validate_story_payload,
 )
+from story_utils import validate_config
 
 
 CONFIG = {
@@ -23,9 +29,11 @@ CONFIG = {
     "site_url": "https://example.com/story/",
 }
 
+VALID_BODY = "物語の本文です。" * 100
+
 CONTINUATION = {
     "title": "続きの題",
-    "body": "続きの本文",
+    "body": VALID_BODY,
     "summary": "続きの要約",
     "new_characters": [],
 }
@@ -33,7 +41,7 @@ CONTINUATION = {
 FIRST_EPISODE = {
     "work_title": "新しい物語",
     "title": "始まり",
-    "body": "第1話の本文",
+    "body": VALID_BODY,
     "summary": "第1話の要約",
     "world": "新しい世界の設定。",
     "characters": [
@@ -82,6 +90,14 @@ class StructuredOutputTests(unittest.TestCase):
             validate_story_payload(story, False),
         )
 
+    def test_payload_validation_rejects_short_body(self):
+        story = copy.deepcopy(CONTINUATION)
+        story["body"] = "短い本文"
+        self.assertIn(
+            f"body が短すぎます（4文字、最低{MIN_BODY_LENGTH}文字）",
+            validate_story_payload(story, False),
+        )
+
     def test_fetch_story_retries_invalid_json_and_safety_stop(self):
         responses = iter([
             api_response("not-json"),
@@ -112,6 +128,24 @@ class StructuredOutputTests(unittest.TestCase):
 
         self.assertEqual(result, CONTINUATION)
         self.assertEqual(waits, [5, 10])
+
+    def test_fetch_story_retries_malformed_candidate_shape(self):
+        responses = iter([
+            {"candidates": {"unexpected": "object"}},
+            api_response(json.dumps(CONTINUATION)),
+        ])
+        waits = []
+
+        result = fetch_story(
+            "prompt",
+            False,
+            "test-key",
+            urlopen=lambda request, timeout: FakeResponse(next(responses)),
+            sleep=waits.append,
+        )
+
+        self.assertEqual(result, CONTINUATION)
+        self.assertEqual(waits, [5])
 
     def test_fetch_story_falls_back_to_2_5_flash_on_rate_limit(self):
         calls = []
@@ -190,7 +224,7 @@ class GenerationTests(unittest.TestCase):
             "title": "前回",
             "date": "2026年07月13日",
             "iso": "2026-07-13",
-            "body": "前回の本文",
+            "body": VALID_BODY,
         }]
         self.bible = {
             "work_title": "連載作品",
@@ -226,13 +260,16 @@ class GenerationTests(unittest.TestCase):
                 "title": f"第{number}章",
                 "date": f"2026年07月{number:02d}日",
                 "iso": f"2026-07-{number:02d}",
-                "body": f"本文{number}",
+                "body": VALID_BODY + str(number),
             })
+
+        completed_bible = copy.deepcopy(self.bible)
+        completed_bible["synopsis"] = [f"第{number}話の要約" for number in range(1, 6)]
 
         updates = generate_updates(
             CONFIG,
             completed_stories,
-            self.bible,
+            completed_bible,
             [],
             lambda prompt, first: copy.deepcopy(FIRST_EPISODE),
             self.now,
@@ -261,6 +298,128 @@ class GenerationTests(unittest.TestCase):
             )
         self.assertEqual(self.stories, original_stories)
 
+    def test_generation_rejects_current_story_over_configured_limit(self):
+        stories = []
+        for number in range(1, 7):
+            stories.append({
+                "episode": number,
+                "title": f"第{number}章",
+                "date": f"2026年07月{number:02d}日",
+                "iso": f"2026-07-{number:02d}",
+                "body": VALID_BODY,
+            })
+        bible = copy.deepcopy(self.bible)
+        bible["synopsis"] = [f"第{number}話の要約" for number in range(1, 7)]
+
+        with self.assertRaisesRegex(SystemExit, "設定上限"):
+            generate_updates(
+                CONFIG,
+                stories,
+                bible,
+                [],
+                lambda prompt, first: copy.deepcopy(FIRST_EPISODE),
+                self.now,
+            )
+
+
+class StateValidationTests(unittest.TestCase):
+    def setUp(self):
+        self.stories = [{
+            "episode": 1,
+            "title": "始まり",
+            "date": "2026年07月23日",
+            "iso": "2026-07-23",
+            "body": VALID_BODY,
+        }]
+        self.bible = {
+            "work_title": "作品",
+            "world": "世界設定",
+            "characters": [{"name": "主人公", "desc": "主人公の説明"}],
+            "synopsis": ["第1話の要約"],
+        }
+
+    def test_validate_state_accepts_complete_state(self):
+        validate_state(self.stories, self.bible, [])
+
+    def test_validate_state_rejects_invalid_iso_date(self):
+        self.stories[0]["iso"] = "2026-02-30"
+        with self.assertRaisesRegex(SystemExit, "実在する日付"):
+            validate_state(self.stories, self.bible, [])
+
+    def test_validate_state_rejects_display_date_mismatch(self):
+        self.stories[0]["date"] = "2026年07月22日"
+        with self.assertRaisesRegex(SystemExit, "iso と同じ日"):
+            validate_state(self.stories, self.bible, [])
+
+    def test_validate_state_rejects_synopsis_count_mismatch(self):
+        self.bible["synopsis"] = []
+        with self.assertRaisesRegex(SystemExit, "話数と一致"):
+            validate_state(self.stories, self.bible, [])
+
+    def test_validate_state_rejects_short_stored_body(self):
+        self.stories[0]["body"] = "短い本文"
+        with self.assertRaisesRegex(SystemExit, f"{MIN_BODY_LENGTH}文字以上"):
+            validate_state(self.stories, self.bible, [])
+
+    def test_validate_state_rejects_archive_episode_count_mismatch(self):
+        library = [{
+            "work_title": "完結作品",
+            "completed": "2026-07-23",
+            "total_episodes": 2,
+            "episodes": copy.deepcopy(self.stories),
+        }]
+        with self.assertRaisesRegex(SystemExit, "episodes の件数と一致"):
+            validate_state(self.stories, self.bible, library)
+
+
+class RssTests(unittest.TestCase):
+    def test_build_rss_escapes_site_url(self):
+        stories = [{
+            "episode": 1,
+            "title": "始まり",
+            "date": "2026年07月23日",
+            "iso": "2026-07-23",
+            "body": VALID_BODY,
+        }]
+        bible = {"work_title": "作品"}
+
+        rss = build_rss(
+            "https://example.com/a&b/",
+            5,
+            stories,
+            bible,
+            [],
+        )
+
+        self.assertIn("https://example.com/a&amp;b/", rss)
+        ET.fromstring(rss)
+
+
+class RepositoryIntegrityTests(unittest.TestCase):
+    def test_repository_data_and_rss_are_consistent(self):
+        root = Path(__file__).resolve().parents[1]
+
+        def read_json(filename):
+            return json.loads((root / filename).read_text(encoding="utf-8"))
+
+        config = read_json("config.json")
+        stories = read_json("stories.json")
+        bible = read_json("bible.json")
+        library = read_json("library.json")
+        total_episodes, site_url = validate_config(config)
+        validate_state(stories, bible, library)
+        expected_rss = build_rss(
+            site_url,
+            total_episodes,
+            stories,
+            bible,
+            library,
+        )
+        actual_rss = (root / "rss.xml").read_text(encoding="utf-8")
+
+        self.assertEqual(actual_rss, expected_rss)
+        ET.fromstring(actual_rss)
+
 
 class AtomicWriteTests(unittest.TestCase):
     def test_atomic_write_replaces_all_files(self):
@@ -277,19 +436,76 @@ class AtomicWriteTests(unittest.TestCase):
 
             self.assertEqual(first.read_text(encoding="utf-8"), "new-json")
             self.assertEqual(second.read_text(encoding="utf-8"), "new-xml")
-            self.assertEqual(list(Path(tmp).glob("*.tmp")), [])
+            self.assertFalse(any(path.suffix in {".tmp", ".bak"} for path in Path(tmp).iterdir()))
 
     def test_atomic_write_keeps_original_when_first_replace_fails(self):
         with tempfile.TemporaryDirectory() as tmp:
             target = Path(tmp) / "stories.json"
             target.write_text("old", encoding="utf-8")
+            real_replace = os.replace
 
-            with mock.patch("generate.os.replace", side_effect=OSError("failed")):
+            def fail_new_file_replace(source, destination):
+                if Path(source).suffix == ".tmp":
+                    raise OSError("failed")
+                return real_replace(source, destination)
+
+            with mock.patch("generate.os.replace", side_effect=fail_new_file_replace):
                 with self.assertRaisesRegex(OSError, "failed"):
                     atomic_write_files({target: "new"})
 
             self.assertEqual(target.read_text(encoding="utf-8"), "old")
-            self.assertEqual(list(Path(tmp).glob("*.tmp")), [])
+            self.assertFalse(any(path.suffix in {".tmp", ".bak"} for path in Path(tmp).iterdir()))
+
+    def test_atomic_write_rolls_back_when_second_replace_fails(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            first = Path(tmp) / "first.json"
+            second = Path(tmp) / "second.json"
+            first.write_text("old-first", encoding="utf-8")
+            second.write_text("old-second", encoding="utf-8")
+            real_replace = os.replace
+            replacement_count = 0
+
+            def fail_second_replacement(source, target):
+                nonlocal replacement_count
+                if Path(source).suffix == ".tmp":
+                    replacement_count += 1
+                    if replacement_count == 2:
+                        raise OSError("second replace failed")
+                return real_replace(source, target)
+
+            with mock.patch("generate.os.replace", side_effect=fail_second_replacement):
+                with self.assertRaisesRegex(OSError, "second replace failed"):
+                    atomic_write_files({first: "new-first", second: "new-second"})
+
+            self.assertEqual(first.read_text(encoding="utf-8"), "old-first")
+            self.assertEqual(second.read_text(encoding="utf-8"), "old-second")
+            self.assertFalse(any(path.suffix in {".tmp", ".bak"} for path in Path(tmp).iterdir()))
+
+    def test_atomic_write_preserves_backups_when_rollback_fails(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            first = Path(tmp) / "first.json"
+            second = Path(tmp) / "second.json"
+            first.write_text("old-first", encoding="utf-8")
+            second.write_text("old-second", encoding="utf-8")
+            real_replace = os.replace
+            replacement_count = 0
+
+            def fail_replacement_and_rollback(source, target):
+                nonlocal replacement_count
+                suffix = Path(source).suffix
+                if suffix == ".tmp":
+                    replacement_count += 1
+                    if replacement_count == 2:
+                        raise OSError("replace failed")
+                elif suffix == ".bak":
+                    raise OSError("rollback failed")
+                return real_replace(source, target)
+
+            with mock.patch("generate.os.replace", side_effect=fail_replacement_and_rollback):
+                with self.assertRaisesRegex(RuntimeError, "復旧用"):
+                    atomic_write_files({first: "new-first", second: "new-second"})
+
+            self.assertTrue(any(path.suffix == ".bak" for path in Path(tmp).iterdir()))
 
 
 if __name__ == "__main__":

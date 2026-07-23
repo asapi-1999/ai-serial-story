@@ -5,6 +5,7 @@ import http.client
 import json
 import os
 import re
+import shutil
 import tempfile
 import time
 import urllib.error
@@ -16,6 +17,7 @@ from story_utils import load_json, validate_config
 
 JST = datetime.timezone(datetime.timedelta(hours=9))
 ATTEMPTS = 4
+MIN_BODY_LENGTH = 600
 MODEL_OPTIONS = (
     ("gemini-3.5-flash", {"thinkingLevel": "medium"}),
     ("gemini-2.5-flash", {"thinkingBudget": 2048}),
@@ -36,13 +38,134 @@ def fresh_bible():
     return {"work_title": "", "world": "", "characters": [], "synopsis": []}
 
 
+def is_valid_iso_date(value):
+    if not isinstance(value, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", value):
+        return False
+    try:
+        datetime.date.fromisoformat(value)
+    except ValueError:
+        return False
+    return True
+
+
+def is_matching_display_date(value, iso_date):
+    if (
+        not isinstance(value, str)
+        or not re.fullmatch(r"\d{4}年\d{2}月\d{2}日", value)
+        or not is_valid_iso_date(iso_date)
+    ):
+        return False
+    try:
+        parsed = datetime.datetime.strptime(value, "%Y年%m月%d日").date()
+    except ValueError:
+        return False
+    return parsed.isoformat() == iso_date
+
+
+def episode_list_errors(episodes, path):
+    errors = []
+    if not isinstance(episodes, list):
+        return [f"{path} は配列である必要があります"]
+
+    for index, story in enumerate(episodes):
+        item_path = f"{path}[{index}]"
+        if not isinstance(story, dict):
+            errors.append(f"{item_path} はオブジェクトである必要があります")
+            continue
+        episode = story.get("episode")
+        if isinstance(episode, bool) or not isinstance(episode, int):
+            errors.append(f"{item_path}.episode は整数である必要があります")
+        elif episode != index + 1:
+            errors.append(f"{item_path}.episode は {index + 1} である必要があります")
+        for key in ("title", "date", "body"):
+            value = story.get(key)
+            if not isinstance(value, str) or not value.strip():
+                errors.append(f"{item_path}.{key} は空でない文字列である必要があります")
+            elif key == "body" and len(value.strip()) < MIN_BODY_LENGTH:
+                errors.append(
+                    f"{item_path}.body は{MIN_BODY_LENGTH}文字以上である必要があります"
+                )
+        if not is_valid_iso_date(story.get("iso")):
+            errors.append(f"{item_path}.iso は YYYY-MM-DD 形式の実在する日付である必要があります")
+        elif not is_matching_display_date(story.get("date"), story["iso"]):
+            errors.append(f"{item_path}.date は iso と同じ日を YYYY年MM月DD日 形式で表す必要があります")
+    return errors
+
+
 def validate_state(stories, bible, library):
+    errors = []
     if not isinstance(stories, list):
-        raise SystemExit("stories.json のルートは配列である必要があります。")
+        errors.append("stories.json のルートは配列である必要があります")
     if not isinstance(bible, dict):
-        raise SystemExit("bible.json のルートはオブジェクトである必要があります。")
+        errors.append("bible.json のルートはオブジェクトである必要があります")
     if not isinstance(library, list):
-        raise SystemExit("library.json のルートは配列である必要があります。")
+        errors.append("library.json のルートは配列である必要があります")
+    if errors:
+        raise SystemExit("保存データが不正です:\n- " + "\n- ".join(errors))
+
+    errors.extend(episode_list_errors(stories, "stories.json"))
+
+    for key in ("work_title", "world"):
+        value = bible.get(key)
+        if not isinstance(value, str):
+            errors.append(f"bible.json.{key} は文字列である必要があります")
+        elif stories and not value.strip():
+            errors.append(f"bible.json.{key} は連載中に空にできません")
+
+    characters = bible.get("characters")
+    if not isinstance(characters, list):
+        errors.append("bible.json.characters は配列である必要があります")
+    else:
+        if stories and not characters:
+            errors.append("bible.json.characters は連載中に空にできません")
+        for index, person in enumerate(characters):
+            path = f"bible.json.characters[{index}]"
+            if not isinstance(person, dict):
+                errors.append(f"{path} はオブジェクトである必要があります")
+                continue
+            for key in ("name", "desc"):
+                value = person.get(key)
+                if not isinstance(value, str) or not value.strip():
+                    errors.append(f"{path}.{key} は空でない文字列である必要があります")
+
+    synopsis = bible.get("synopsis")
+    if not isinstance(synopsis, list):
+        errors.append("bible.json.synopsis は配列である必要があります")
+    else:
+        if len(synopsis) != len(stories):
+            errors.append("bible.json.synopsis の件数は stories.json の話数と一致する必要があります")
+        for index, summary in enumerate(synopsis):
+            if not isinstance(summary, str) or not summary.strip():
+                errors.append(f"bible.json.synopsis[{index}] は空でない文字列である必要があります")
+
+    for index, work in enumerate(library):
+        path = f"library.json[{index}]"
+        if not isinstance(work, dict):
+            errors.append(f"{path} はオブジェクトである必要があります")
+            continue
+        if not isinstance(work.get("work_title"), str) or not work["work_title"].strip():
+            errors.append(f"{path}.work_title は空でない文字列である必要があります")
+        if not is_valid_iso_date(work.get("completed")):
+            errors.append(f"{path}.completed は YYYY-MM-DD 形式の実在する日付である必要があります")
+        total = work.get("total_episodes")
+        if isinstance(total, bool) or not isinstance(total, int) or total < 1:
+            errors.append(f"{path}.total_episodes は1以上の整数である必要があります")
+        episodes = work.get("episodes")
+        errors.extend(episode_list_errors(episodes, f"{path}.episodes"))
+        if isinstance(episodes, list):
+            if not episodes:
+                errors.append(f"{path}.episodes は空にできません")
+            if isinstance(total, int) and not isinstance(total, bool) and total != len(episodes):
+                errors.append(f"{path}.total_episodes は episodes の件数と一致する必要があります")
+            if (
+                episodes
+                and is_valid_iso_date(work.get("completed"))
+                and work["completed"] != episodes[-1].get("iso")
+            ):
+                errors.append(f"{path}.completed は最終話の iso と一致する必要があります")
+
+    if errors:
+        raise SystemExit("保存データが不正です:\n- " + "\n- ".join(errors))
 
 
 def person_schema():
@@ -131,6 +254,10 @@ def validate_story_payload(story, first_episode):
         value = story.get(key)
         if not isinstance(value, str) or not value.strip():
             errors.append(f"{key} が空でない文字列ではありません")
+        elif key == "body" and len(value.strip()) < MIN_BODY_LENGTH:
+            errors.append(
+                f"body が短すぎます（{len(value.strip())}文字、最低{MIN_BODY_LENGTH}文字）"
+            )
 
     people = story.get(people_key)
     if not isinstance(people, list):
@@ -280,7 +407,7 @@ def fetch_story(
                 last_err = "API応答のルートがオブジェクトではありません"
                 continue
             candidates = result.get("candidates")
-            if not candidates:
+            if not isinstance(candidates, list) or not candidates:
                 last_err = f"候補ゼロ（promptFeedback={result.get('promptFeedback', {})}）"
                 continue
             candidate = candidates[0]
@@ -296,12 +423,31 @@ def fetch_story(
                 last_err += "）"
                 continue
 
-            parts = candidate.get("content", {}).get("parts") or []
-            response_text = "".join(
-                part.get("text", "")
-                for part in parts
-                if isinstance(part, dict) and not part.get("thought")
-            ).strip()
+            content = candidate.get("content")
+            if not isinstance(content, dict):
+                last_err = "候補のcontentがオブジェクトではありません"
+                continue
+            parts = content.get("parts")
+            if not isinstance(parts, list):
+                last_err = "候補のpartsが配列ではありません"
+                continue
+            response_chunks = []
+            invalid_part = False
+            for part in parts:
+                if not isinstance(part, dict):
+                    invalid_part = True
+                    break
+                if part.get("thought"):
+                    continue
+                text = part.get("text", "")
+                if not isinstance(text, str):
+                    invalid_part = True
+                    break
+                response_chunks.append(text)
+            if invalid_part:
+                last_err = "候補のpartsに不正な要素があります"
+                continue
+            response_text = "".join(response_chunks).strip()
             if not response_text:
                 last_err = "構造化出力が取得できませんでした"
                 continue
@@ -314,6 +460,20 @@ def fetch_story(
             if errors:
                 last_err = "構造化出力が不正: " + "; ".join(errors)
                 continue
+            usage = result.get("usageMetadata")
+            usage_text = ""
+            if isinstance(usage, dict):
+                counts = []
+                for key, label in (
+                    ("promptTokenCount", "入力"),
+                    ("candidatesTokenCount", "出力"),
+                    ("thoughtsTokenCount", "思考"),
+                ):
+                    if isinstance(usage.get(key), int):
+                        counts.append(f"{label}{usage[key]}")
+                if counts:
+                    usage_text = "（トークン: " + " / ".join(counts) + "）"
+            print(f"生成モデル: {model}{usage_text}")
             return story
 
         if has_fallback and fallback_eligible:
@@ -353,21 +513,26 @@ def build_rss(site_url, total_episodes, stories, bible, library):
             .replace(tzinfo=JST)
             .strftime("%a, %d %b %Y %H:%M:%S +0900")
         )
+        episode_url = html.escape(
+            f"{site_url}work.html?work={work_index}#ep{story['episode']}",
+            quote=True,
+        )
         items += f"""
     <item>
       <title>第{story['episode']}話 {html.escape(story['title'])}</title>
-      <link>{site_url}work.html?work={work_index}#ep{story['episode']}</link>
+      <link>{episode_url}</link>
       <guid isPermaLink="false">w{work_index}-ep-{story['episode']}</guid>
       <pubDate>{published}</pubDate>
       <description>{html.escape(story['body'])}</description>
     </item>"""
 
     channel_title = bible.get("work_title") or "AI連載物語"
+    escaped_site_url = html.escape(site_url, quote=True)
     return f"""<?xml version="1.0" encoding="UTF-8"?>
 <rss version="2.0">
   <channel>
     <title>{html.escape(channel_title)}</title>
-    <link>{site_url}</link>
+    <link>{escaped_site_url}</link>
     <description>AIが毎週月曜に連載する全{total_episodes}話完結の物語</description>
     <language>ja</language>{items}
   </channel>
@@ -377,6 +542,10 @@ def build_rss(site_url, total_episodes, stories, bible, library):
 def generate_updates(config, stories, bible, library, generate_content, now):
     validate_state(stories, bible, library)
     total_episodes, site_url = validate_config(config)
+    if len(stories) > total_episodes:
+        raise SystemExit(
+            f"stories.json が設定上限の全{total_episodes}話を超えています。"
+        )
     stories = copy.deepcopy(stories)
     bible = copy.deepcopy(bible)
     library = copy.deepcopy(library)
@@ -471,6 +640,9 @@ def serialize_updates(updates):
 
 def atomic_write_files(contents):
     temporary_files = {}
+    backup_files = {}
+    replaced_targets = []
+    preserve_backups = False
     try:
         for filename, content in contents.items():
             target = Path(filename)
@@ -488,12 +660,49 @@ def atomic_write_files(contents):
                 os.fsync(temporary.fileno())
                 temporary_files[target] = Path(temporary.name)
 
+            if target.exists():
+                with tempfile.NamedTemporaryFile(
+                    mode="w+b",
+                    dir=target.parent,
+                    prefix=f".{target.name}.",
+                    suffix=".bak",
+                    delete=False,
+                ) as backup:
+                    with target.open("rb") as source:
+                        shutil.copyfileobj(source, backup)
+                    backup.flush()
+                    os.fsync(backup.fileno())
+                    backup_files[target] = Path(backup.name)
+
         for target, temporary in temporary_files.items():
+            replaced_targets.append(target)
             os.replace(temporary, target)
+    except BaseException as exc:
+        rollback_errors = []
+        for target in reversed(replaced_targets):
+            backup = backup_files.get(target)
+            try:
+                if backup is not None:
+                    os.replace(backup, target)
+                elif target.exists():
+                    target.unlink()
+            except OSError as rollback_exc:
+                rollback_errors.append(f"{target}: {rollback_exc}")
+        if rollback_errors:
+            preserve_backups = True
+            raise RuntimeError(
+                "ファイル更新とロールバックの両方に失敗しました: "
+                + "; ".join(rollback_errors)
+                + "。復旧用の.bakファイルを保持します。"
+            ) from exc
+        raise
     finally:
-        for temporary in temporary_files.values():
-            if temporary.exists():
-                temporary.unlink()
+        cleanup_paths = list(temporary_files.values())
+        if not preserve_backups:
+            cleanup_paths.extend(backup_files.values())
+        for path in cleanup_paths:
+            if path.exists():
+                path.unlink()
 
 
 def main():

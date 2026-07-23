@@ -63,6 +63,7 @@
 <script>
   var SITE_URL = '';
   var TOTAL_EPISODES = 0;
+  var MIN_BODY_LENGTH = 600;
   var stories = [];
   var bible = {};
   var library = [];
@@ -113,7 +114,7 @@
       var pub = days[wd] + ', ' + p[2] + ' ' + months[+p[1] - 1] + ' ' + p[0] + ' 00:00:00 +0900';
       items += '\n    <item>' +
         '\n      <title>第' + s.episode + '話 ' + htmlEscape(s.title) + '</title>' +
-        '\n      <link>' + SITE_URL + 'work.html?work=' + workIndex + '#ep' + s.episode + '</link>' +
+        '\n      <link>' + htmlEscape(SITE_URL + 'work.html?work=' + workIndex + '#ep' + s.episode) + '</link>' +
         '\n      <guid isPermaLink="false">w' + workIndex + '-ep-' + s.episode + '</guid>' +
         '\n      <pubDate>' + pub + '</pubDate>' +
         '\n      <description>' + htmlEscape(s.body) + '</description>' +
@@ -123,7 +124,7 @@
       '<rss version="2.0">\n' +
       '  <channel>\n' +
       '    <title>' + htmlEscape(channelTitle) + '</title>\n' +
-      '    <link>' + SITE_URL + '</link>\n' +
+      '    <link>' + htmlEscape(SITE_URL) + '</link>\n' +
       '    <description>AIが毎週月曜に連載する全' + TOTAL_EPISODES + '話完結の物語</description>\n' +
       '    <language>ja</language>' + items + '\n' +
       '  </channel>\n' +
@@ -296,6 +297,20 @@
     if (typeof loaded[3].site_url !== 'string' || !loaded[3].site_url.trim()) {
       throw new Error('config.json の site_url は空でない文字列である必要があります');
     }
+    var parsedSiteUrl;
+    try {
+      parsedSiteUrl = new URL(loaded[3].site_url);
+    } catch (err) {
+      throw new Error('config.json の site_url は正しいURLである必要があります');
+    }
+    if (!/^https?:$/.test(parsedSiteUrl.protocol)
+        || /\s/.test(loaded[3].site_url)
+        || parsedSiteUrl.username
+        || parsedSiteUrl.password
+        || parsedSiteUrl.search
+        || parsedSiteUrl.hash) {
+      throw new Error('config.json の site_url はクエリやフラグメントを含まないhttp(s) URLである必要があります');
+    }
     stories = loaded[0];
     bible = loaded[1];
     library = loaded[2];
@@ -315,6 +330,58 @@
     bible.synopsis = stories.map(function (story, i) {
       return '第' + story.episode + '話「' + story.title + '」：' + (synopses[i] || '（要約未入力）');
     });
+  }
+
+  function isValidIsoDate(value) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+    var date = new Date(value + 'T00:00:00Z');
+    return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value;
+  }
+
+  function isMatchingDisplayDate(value, iso) {
+    if (typeof value !== 'string' || !isValidIsoDate(iso)) return false;
+    return value === iso.slice(0, 4) + '年' + iso.slice(5, 7) + '月' + iso.slice(8, 10) + '日';
+  }
+
+  function validateForSave() {
+    if (stories.length > TOTAL_EPISODES) {
+      throw new Error('話数が設定上限（全' + TOTAL_EPISODES + '話）を超えています');
+    }
+    stories.forEach(function (story, i) {
+      var label = '第' + (i + 1) + '話';
+      if (typeof story.title !== 'string' || !story.title.trim()) {
+        throw new Error(label + 'のタイトルを入力してください');
+      }
+      if (!isValidIsoDate(story.iso)) {
+        throw new Error(label + 'の日付を YYYY-MM-DD 形式の実在する日付で入力してください');
+      }
+      if (!isMatchingDisplayDate(story.date, story.iso)) {
+        throw new Error(label + 'の表示用更新日はISO日付と同じ日を YYYY年MM月DD日 形式で入力してください');
+      }
+      if (typeof story.body !== 'string' || story.body.trim().length < MIN_BODY_LENGTH) {
+        throw new Error(label + 'の本文は' + MIN_BODY_LENGTH + '文字以上必要です');
+      }
+      if (typeof synopses[i] !== 'string' || !synopses[i].trim()) {
+        throw new Error(label + 'のあらすじを入力してください');
+      }
+    });
+    if (stories.length) {
+      if (typeof bible.work_title !== 'string' || !bible.work_title.trim()) {
+        throw new Error('作品タイトルが設定されていません');
+      }
+      if (typeof bible.world !== 'string' || !bible.world.trim()) {
+        throw new Error('世界観が設定されていません');
+      }
+      if (!Array.isArray(bible.characters) || !bible.characters.length) {
+        throw new Error('登場人物が設定されていません');
+      }
+      bible.characters.forEach(function (person, i) {
+        if (!person || typeof person.name !== 'string' || !person.name.trim()
+            || typeof person.desc !== 'string' || !person.desc.trim()) {
+          throw new Error('登場人物' + (i + 1) + 'の名前または説明が不正です');
+        }
+      });
+    }
   }
 
   document.getElementById('openBtn').addEventListener('click', async function () {
@@ -363,9 +430,10 @@
   // ===== 保存（直接上書き）=====
   document.getElementById('saveBtn').addEventListener('click', async function () {
     if (!dirHandle) { alert('フォルダが開かれていません。'); return; }
-    renumber();
-    syncBibleSynopsis();
     try {
+      renumber();
+      validateForSave();
+      syncBibleSynopsis();
       await writeFile('stories.json', JSON.stringify(stories, null, 2));
       await writeFile('bible.json', JSON.stringify(bible, null, 2));
       await writeFile('rss.xml', buildRss(stories));
@@ -384,12 +452,17 @@
 
   // ===== ダウンロード（フォルダ未対応ブラウザ向けフォールバック）=====
   document.getElementById('downloadBtn').addEventListener('click', function () {
-    renumber();
-    syncBibleSynopsis();
-    download('stories.json', JSON.stringify(stories, null, 2), 'application/json');
-    download('bible.json', JSON.stringify(bible, null, 2), 'application/json');
-    download('rss.xml', buildRss(stories), 'application/xml');
-    setStatus('ダウンロードしました ⬇（リポジトリ内のファイルを差し替えて git push）');
+    try {
+      renumber();
+      validateForSave();
+      syncBibleSynopsis();
+      download('stories.json', JSON.stringify(stories, null, 2), 'application/json');
+      download('bible.json', JSON.stringify(bible, null, 2), 'application/json');
+      download('rss.xml', buildRss(stories), 'application/xml');
+      setStatus('ダウンロードしました ⬇（リポジトリ内のファイルを差し替えて git push）');
+    } catch (err) {
+      alert('ダウンロードできません：' + err);
+    }
   });
 
   function download(name, content, mime) {

@@ -1,4 +1,5 @@
 import json
+import urllib.parse
 
 
 def load_json(path):
@@ -23,4 +24,22 @@ def validate_config(config):
     if not isinstance(site_url, str) or not site_url.strip():
         raise SystemExit("config.json の site_url は空でない文字列である必要があります。")
 
-    return total_episodes, site_url.strip().rstrip("/") + "/"
+    site_url = site_url.strip().rstrip("/") + "/"
+    try:
+        parsed = urllib.parse.urlsplit(site_url)
+    except ValueError as exc:
+        raise SystemExit("config.json の site_url をURLとして解析できません。") from exc
+    if (
+        parsed.scheme not in {"http", "https"}
+        or not parsed.netloc
+        or any(character.isspace() for character in site_url)
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise SystemExit(
+            "config.json の site_url はクエリやフラグメントを含まないhttp(s) URLである必要があります。"
+        )
+
+    return total_episodes, site_url

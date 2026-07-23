@@ -22,8 +22,22 @@ jobs:
         with:
           ref: main
 
+      - name: Record Generation Base
+        run: echo "GENERATION_BASE_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+
       - name: Run Tests
         run: python3 -m unittest discover -s tests
+
+      - name: Run Static Checks
+        run: node tests/check_static.js
+
+      - name: Verify Generation Base
+        run: |
+          git fetch origin main
+          if [ "$(git rev-parse FETCH_HEAD)" != "$GENERATION_BASE_SHA" ]; then
+            echo "::error::main was updated before generation. Rerun the workflow."
+            exit 1
+          fi
 
       - name: Generate Story with Gemini
         env:
@@ -32,11 +46,13 @@ jobs:
 
       - name: Commit and Push
         run: |
+          git fetch origin main
+          if [ "$(git rev-parse FETCH_HEAD)" != "$GENERATION_BASE_SHA" ]; then
+            echo "::error::main was updated during generation. Refusing to commit stale output; rerun the workflow."
+            exit 1
+          fi
           git config user.name "github-actions"
           git config user.email "actions@github.com"
-          git stash
-          git pull --rebase origin main
-          git stash pop
           git add stories.json bible.json rss.xml library.json
           if git diff --cached --quiet; then
             echo "変更なし"

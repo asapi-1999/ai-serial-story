@@ -37,6 +37,18 @@ class StoryUtilsTests(unittest.TestCase):
         with self.assertRaisesRegex(SystemExit, "total_episodes"):
             validate_config({"total_episodes": True, "site_url": "https://example.com"})
 
+    def test_validate_config_rejects_invalid_site_url(self):
+        with self.assertRaisesRegex(SystemExit, r"http\(s\) URL"):
+            validate_config({"total_episodes": 5, "site_url": "javascript:alert(1)"})
+
+    def test_validate_config_rejects_site_url_query(self):
+        with self.assertRaisesRegex(SystemExit, "クエリ"):
+            validate_config({"total_episodes": 5, "site_url": "https://example.com/?x=1"})
+
+    def test_validate_config_rejects_site_url_credentials(self):
+        with self.assertRaisesRegex(SystemExit, r"http\(s\) URL"):
+            validate_config({"total_episodes": 5, "site_url": "https://user@example.com/"})
+
 
 if __name__ == "__main__":
     unittest.main()
