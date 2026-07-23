@@ -1,72 +1,23 @@
-import urllib.request
-import urllib.error
+import copy
+import datetime
+import html
 import http.client
 import json
 import os
-import datetime
 import re
+import tempfile
 import time
-import html
+import urllib.error
+import urllib.request
+from pathlib import Path
 
-from story_utils import load_json, missing_story_sections, section, section_line, validate_config
+from story_utils import load_json, validate_config
+
 
 JST = datetime.timezone(datetime.timedelta(hours=9))
-now = datetime.datetime.now(JST)
-today = now.strftime("%Y年%m月%d日")
-today_iso = now.strftime("%Y-%m-%d")
+ATTEMPTS = 4
+MODEL = "gemini-2.5-flash"
 
-
-def fresh_bible():
-    return {"work_title": "", "world": "", "characters": [], "synopsis": []}
-
-
-config = load_json("config.json")
-stories = load_json("stories.json")
-bible = load_json("bible.json")
-library = load_json("library.json")
-if not isinstance(stories, list):
-    raise SystemExit("stories.json のルートは配列である必要があります。")
-if not isinstance(bible, dict):
-    raise SystemExit("bible.json のルートはオブジェクトである必要があります。")
-if not isinstance(library, list):
-    raise SystemExit("library.json のルートは配列である必要があります。")
-
-TOTAL_EPISODES, SITE_URL = validate_config(config)
-
-episode_number = len(stories) + 1
-
-# 設定した話数で完結する連載。完結済みなら、その作品を書庫(library.json)へ退避し、
-# 新しい作品を第1話から始める。退避の確定（ファイル書き込み）は生成成功後に行う。
-starting_new_work = episode_number > TOTAL_EPISODES
-completed_work = None
-if starting_new_work:
-    completed_work = {
-        "work_title": bible.get("work_title") or "無題の物語",
-        "completed": stories[-1].get("iso") or today_iso,
-        "total_episodes": TOTAL_EPISODES,
-        "episodes": stories,
-    }
-    print(f"前作「{completed_work['work_title']}」が全{TOTAL_EPISODES}話で完結。新しい作品を開始します。")
-    stories = []
-    bible = fresh_bible()
-    episode_number = 1
-
-
-def parse_people(text):
-    """1行1人「名前：説明」をパースして辞書のリストに。"""
-    people = []
-    for line in text.splitlines():
-        line = line.strip().lstrip("・-*").strip()
-        if not line or line in ("なし", "無し", "特になし"):
-            continue
-        pair = re.split(r"[：:]", line, maxsplit=1)
-        if len(pair) == 2 and pair[0].strip():
-            people.append({"name": pair[0].strip(), "desc": pair[1].strip()})
-    return people
-
-
-# ----- プロンプト組み立て -----
-# 本文中のルビ指定方法（サイト側の <ruby> 変換ルールに対応した青空文庫式）。
 RUBY_GUIDE = (
     "・難読な漢字・固有名詞・印象づけたい語にはルビ（ふりがな）を振ってよい。\n"
     "  書式は青空文庫式で、読みは全角の《 》で囲む。読みはひらがなかカタカナで書くこと。\n"
@@ -76,264 +27,477 @@ RUBY_GUIDE = (
     "  ・ルビは多用せず、効果的な箇所に絞ること。\n"
 )
 
-if episode_number == 1:
-    prompt = (
-        "あなたはプロの小説家です。\n"
-        "これから全" + str(TOTAL_EPISODES) + "話で完結する連載小説を新しく始めます。\n"
-        "以下の条件で第1話（全" + str(TOTAL_EPISODES) + "話）を書いてください：\n"
-        "・ジャンルは自由（ファンタジー／SF／ミステリー／恋愛／ホラー／歴史／日常 など何でも可）。"
-        "今回の作品のジャンルと作風を自由に選ぶこと\n"
-        "・独自の世界観とメインキャラクターを設定すること\n"
-        "・全" + str(TOTAL_EPISODES) + "話で物語が完結する構成を念頭に、第1話では世界観と"
-        "物語の核となる謎・目的を提示すること\n"
-        "・続きが気になる終わり方にすること\n"
-        "・日本語で1000字程度\n"
-        "・「作品タイトル」は連載全体を通したタイトル、「タイトル」は今回の話のタイトルとし、"
-        "どちらにも「第1話」などの話数は含めないこと\n"
-        + RUBY_GUIDE +
-        "・更新日：" + today + "\n\n"
-        "以下の形式で、各セクションを必ず出力してください：\n"
-        "【作品タイトル】連載全体のタイトル\n"
-        "【タイトル】今回（第1話）のタイトル\n"
-        "【本文】\nここに本文\n"
-        "【世界観】物語の舞台・設定を2〜3文で要約\n"
-        "【登場人物】1行に1人、「名前：説明」の形式で記載\n"
-        "【今回のあらすじ】この話の内容を1文で要約"
-    )
-else:
+
+def fresh_bible():
+    return {"work_title": "", "world": "", "characters": [], "synopsis": []}
+
+
+def validate_state(stories, bible, library):
+    if not isinstance(stories, list):
+        raise SystemExit("stories.json のルートは配列である必要があります。")
+    if not isinstance(bible, dict):
+        raise SystemExit("bible.json のルートはオブジェクトである必要があります。")
+    if not isinstance(library, list):
+        raise SystemExit("library.json のルートは配列である必要があります。")
+
+
+def person_schema():
+    return {
+        "type": "object",
+        "properties": {
+            "name": {
+                "type": "string",
+                "description": "人物名",
+            },
+            "description": {
+                "type": "string",
+                "description": "人物の役割・特徴を簡潔に説明した文章",
+            },
+        },
+        "required": ["name", "description"],
+        "additionalProperties": False,
+    }
+
+
+def story_response_schema(first_episode):
+    common = {
+        "title": {
+            "type": "string",
+            "description": "今回の話のタイトル。話数は含めない",
+        },
+        "body": {
+            "type": "string",
+            "description": "日本語で1000字程度の小説本文",
+        },
+        "summary": {
+            "type": "string",
+            "description": "今回の話の内容を1文で要約した文章",
+        },
+    }
+    if first_episode:
+        properties = {
+            "work_title": {
+                "type": "string",
+                "description": "連載全体の作品タイトル。話数は含めない",
+            },
+            **common,
+            "world": {
+                "type": "string",
+                "description": "物語の舞台と設定を2〜3文で要約した文章",
+            },
+            "characters": {
+                "type": "array",
+                "description": "第1話に登場する主要人物",
+                "items": person_schema(),
+                "minItems": 1,
+            },
+        }
+        required = ["work_title", "title", "body", "summary", "world", "characters"]
+    else:
+        properties = {
+            **common,
+            "new_characters": {
+                "type": "array",
+                "description": "今回新たに登場した人物。いなければ空配列",
+                "items": person_schema(),
+            },
+        }
+        required = ["title", "body", "summary", "new_characters"]
+
+    return {
+        "type": "object",
+        "properties": properties,
+        "required": required,
+        "additionalProperties": False,
+        "propertyOrdering": required,
+    }
+
+
+def validate_story_payload(story, first_episode):
+    if not isinstance(story, dict):
+        return ["応答のルートがオブジェクトではありません"]
+
+    required_strings = ["title", "body", "summary"]
+    people_key = "characters" if first_episode else "new_characters"
+    if first_episode:
+        required_strings.extend(["work_title", "world"])
+
+    errors = []
+    for key in required_strings:
+        value = story.get(key)
+        if not isinstance(value, str) or not value.strip():
+            errors.append(f"{key} が空でない文字列ではありません")
+
+    people = story.get(people_key)
+    if not isinstance(people, list):
+        errors.append(f"{people_key} が配列ではありません")
+    else:
+        if first_episode and not people:
+            errors.append("characters が空です")
+        for index, person in enumerate(people):
+            if not isinstance(person, dict):
+                errors.append(f"{people_key}[{index}] がオブジェクトではありません")
+                continue
+            for key in ("name", "description"):
+                value = person.get(key)
+                if not isinstance(value, str) or not value.strip():
+                    errors.append(f"{people_key}[{index}].{key} が空でない文字列ではありません")
+    return errors
+
+
+def build_prompt(episode_number, total_episodes, today, bible, stories):
+    if episode_number == 1:
+        return (
+            "あなたはプロの小説家です。\n"
+            f"これから全{total_episodes}話で完結する連載小説を新しく始めます。\n"
+            f"以下の条件で第1話（全{total_episodes}話）を書いてください：\n"
+            "・ジャンルは自由（ファンタジー／SF／ミステリー／恋愛／ホラー／歴史／日常など何でも可）。"
+            "今回の作品のジャンルと作風を自由に選ぶこと\n"
+            "・独自の世界観とメインキャラクターを設定すること\n"
+            f"・全{total_episodes}話で物語が完結する構成を念頭に、第1話では世界観と"
+            "物語の核となる謎・目的を提示すること\n"
+            "・続きが気になる終わり方にすること\n"
+            "・日本語で1000字程度\n"
+            "・作品タイトルと今回のタイトルのどちらにも話数を含めないこと\n"
+            + RUBY_GUIDE
+            + f"・更新日：{today}\n"
+            "・指定されたJSON Schemaの各項目を、物語の内容に合わせて埋めること"
+        )
+
     chars = "\n".join(
-        f"・{p['name']}：{p['desc']}" for p in bible.get("characters", [])
+        f"・{person['name']}：{person['desc']}"
+        for person in bible.get("characters", [])
     ) or "（未設定）"
     synopsis = "\n".join(bible.get("synopsis", [])) or "（なし）"
-    recent = ""
-    for s in stories[-2:]:
-        recent += f"第{s['episode']}話「{s['title']}」\n{s['body']}\n\n"
-
-    work_title = bible.get("work_title") or "（未設定）"
-    is_final = episode_number == TOTAL_EPISODES
+    recent = "".join(
+        f"第{story['episode']}話「{story['title']}」\n{story['body']}\n\n"
+        for story in stories[-2:]
+    )
+    is_final = episode_number == total_episodes
     if is_final:
         ending_rule = (
-            "・これは最終話（第" + str(TOTAL_EPISODES) + "話）です。"
-            "これまでに張られた伏線や謎を回収し、物語をきれいに完結させること\n"
+            f"・これは最終話（第{total_episodes}話）です。これまでに張られた伏線や謎を回収し、"
+            "物語をきれいに完結させること\n"
         )
     else:
         ending_rule = (
-            "・全" + str(TOTAL_EPISODES) + "話構成のうちの第" + str(episode_number) +
-            "話として、最終話（第" + str(TOTAL_EPISODES) + "話）での完結に向けて物語を前進させること\n"
+            f"・全{total_episodes}話構成のうちの第{episode_number}話として、"
+            f"最終話（第{total_episodes}話）での完結に向けて物語を前進させること\n"
             "・続きが気になる終わり方にすること\n"
         )
 
-    prompt = (
-        "あなたはプロの小説家です。全" + str(TOTAL_EPISODES) +
-        "話で完結する連載小説の続きを書きます。\n\n"
-        "# 作品タイトル\n" + work_title + "\n\n"
+    return (
+        f"あなたはプロの小説家です。全{total_episodes}話で完結する連載小説の続きを書きます。\n\n"
+        f"# 作品タイトル\n{bible.get('work_title') or '（未設定）'}\n\n"
         "# これまでの設定\n"
-        "## 世界観\n" + (bible.get("world") or "（未設定）") + "\n\n"
-        "## 登場人物\n" + chars + "\n\n"
-        "## あらすじ（各話1行）\n" + synopsis + "\n\n"
-        "# 直近のエピソード（全文）\n" + recent +
+        f"## 世界観\n{bible.get('world') or '（未設定）'}\n\n"
+        f"## 登場人物\n{chars}\n\n"
+        f"## あらすじ（各話1行）\n{synopsis}\n\n"
+        f"# 直近のエピソード（全文）\n{recent}"
         "---\n"
-        "上記の続きとなる第" + str(episode_number) + "話（全" + str(TOTAL_EPISODES) +
-        "話）を書いてください。\n"
+        f"上記の続きとなる第{episode_number}話（全{total_episodes}話）を書いてください。\n"
         "以下の条件を守ってください：\n"
         "・これまでのジャンル・作風・世界観・登場人物を引き継ぐこと\n"
         "・直近のエピソードの終わりから自然につながること\n"
-        + ending_rule +
-        "・日本語で1000字程度\n"
-        "・タイトルに「第" + str(episode_number) + "話」などの話数は含めないこと\n"
-        + RUBY_GUIDE +
-        "・更新日：" + today + "\n\n"
-        "以下の形式で、各セクションを必ず出力してください：\n"
-        "【タイトル】ここにタイトル（話数は含めない）\n"
-        "【本文】\nここに本文\n"
-        "【今回のあらすじ】この話の内容を1文で要約\n"
-        "【新登場人物】今回新たに登場した人物を「名前：説明」で記載（いなければ「なし」）"
+        + ending_rule
+        + "・日本語で1000字程度\n"
+        f"・タイトルに「第{episode_number}話」などの話数を含めないこと\n"
+        + RUBY_GUIDE
+        + f"・更新日：{today}\n"
+        "・指定されたJSON Schemaの各項目を、今回の物語の内容に合わせて埋めること"
     )
 
 
-# ----- Gemini 呼び出し（リトライ付き・APIキーはヘッダーで送る）-----
-# 一時的な不調は再試行する。ネットワーク/HTTPエラーだけでなく、
-# 「候補ゼロ（セーフティの揺らぎ）」「空応答」「MAX_TOKENS打ち切り」に加え、
-# 必須マーカーが欠けた出力も対象に含める。
-# これらは1回の不調で起きることが多く、即停止すると週次更新が無駄に落ちるため。
-# 全試行が失敗したときだけ、最後の理由を添えて停止する。
-ATTEMPTS = 4
-
-
-def fetch_story(prompt_text):
+def fetch_story(
+    prompt_text,
+    first_episode,
+    api_key,
+    urlopen=urllib.request.urlopen,
+    sleep=time.sleep,
+):
     payload = json.dumps({
         "contents": [{"parts": [{"text": prompt_text}]}],
         "generationConfig": {
-            # 思考分も maxOutputTokens に含まれるため、本文の枠を確保すべく多めに取る。
             "maxOutputTokens": 12000,
-            # 思考も少しだけ使わせて整合性を上げつつ、本文の出力枠も確保する。
-            # （0にすると思考オフ、-1で動的）
             "thinkingConfig": {"thinkingBudget": 2048},
+            "responseMimeType": "application/json",
+            "responseJsonSchema": story_response_schema(first_episode),
         },
-    }).encode()
-
-    url = ("https://generativelanguage.googleapis.com/v1beta/"
-           "models/gemini-2.5-flash:generateContent")
+    }, ensure_ascii=False).encode("utf-8")
+    url = (
+        "https://generativelanguage.googleapis.com/v1beta/"
+        f"models/{MODEL}:generateContent"
+    )
     last_err = None
+
     for attempt in range(ATTEMPTS):
         if attempt:
             wait = 5 * attempt
             print(f"再試行（{attempt + 1}/{ATTEMPTS}）… {wait}秒待機。直前の理由: {last_err}")
-            time.sleep(wait)
-        # --- API呼び出し ---
+            sleep(wait)
         try:
             req = urllib.request.Request(
                 url,
                 data=payload,
                 headers={
                     "Content-Type": "application/json",
-                    "x-goog-api-key": os.environ["GEMINI_API_KEY"],
+                    "x-goog-api-key": api_key,
                 },
             )
-            with urllib.request.urlopen(req, timeout=120) as r:
-                res = json.loads(r.read())
+            with urlopen(req, timeout=120) as response:
+                result = json.loads(response.read())
         except (
             urllib.error.URLError,
             TimeoutError,
             http.client.HTTPException,
             json.JSONDecodeError,
             UnicodeDecodeError,
-        ) as e:
-            last_err = f"API呼び出し失敗: {e}"
+        ) as exc:
+            last_err = f"API呼び出し失敗: {exc}"
             continue
-        if not isinstance(res, dict):
+
+        if not isinstance(result, dict):
             last_err = "API応答のルートがオブジェクトではありません"
             continue
-        # --- 応答の検証（不調なら次の試行へ）---
-        candidates = res.get("candidates")
+        candidates = result.get("candidates")
         if not candidates:
-            # セーフティブロック等。揺らぎで次回は通ることもあるため再試行する。
-            last_err = f"候補ゼロ（promptFeedback={res.get('promptFeedback', {})}）"
+            last_err = f"候補ゼロ（promptFeedback={result.get('promptFeedback', {})}）"
             continue
-        cand = candidates[0]
-        finish = cand.get("finishReason", "")
+        candidate = candidates[0]
+        if not isinstance(candidate, dict):
+            last_err = "候補がオブジェクトではありません"
+            continue
+        finish = candidate.get("finishReason", "")
         if finish != "STOP":
-            detail = cand.get("finishMessage")
+            detail = candidate.get("finishMessage")
             last_err = f"生成が正常終了しませんでした（finishReason={finish or 'なし'}"
             if detail:
                 last_err += f", finishMessage={detail}"
             last_err += "）"
             continue
-        parts = cand.get("content", {}).get("parts") or []
-        story_text = "".join(
+
+        parts = candidate.get("content", {}).get("parts") or []
+        response_text = "".join(
             part.get("text", "")
             for part in parts
-            if not part.get("thought")
+            if isinstance(part, dict) and not part.get("thought")
         ).strip()
-        if not story_text:
-            last_err = f"本文が取得できませんでした（finishReason={finish}）"
+        if not response_text:
+            last_err = "構造化出力が取得できませんでした"
             continue
-        missing = missing_story_sections(story_text, episode_number == 1)
-        if missing:
-            preview = story_text[:200].replace("\n", " ")
-            last_err = (
-                f"出力フォーマット不正（不足: {', '.join(missing)}）。"
-                f"応答先頭: {preview}"
-            )
+        try:
+            story = json.loads(response_text)
+        except json.JSONDecodeError as exc:
+            last_err = f"構造化出力のJSON解析失敗: {exc}"
             continue
-        return story_text
+        errors = validate_story_payload(story, first_episode)
+        if errors:
+            last_err = "構造化出力が不正: " + "; ".join(errors)
+            continue
+        return story
+
     raise SystemExit(f"Gemini生成に{ATTEMPTS}回失敗しました。最後の理由: {last_err}")
 
 
-story = fetch_story(prompt)
+def normalize_title(title, episode_number):
+    title = re.sub(
+        r"^第?\s*\d+\s*話[「『：:\s]*",
+        "",
+        title,
+    ).strip().strip("「」『』").strip()
+    return title or f"第{episode_number}話"
 
 
-# ----- パース -----
-# タイトルは必ず1行だけ取り出す（【本文】マーカーが欠けても本文を巻き込まない）。
-title = section_line("タイトル", story)
-# モデルが「第N話「…」」のように話数を付けた場合は除去する。
-title = re.sub(r"^第?\s*\d+\s*話[「『：:\s]*", "", title).strip().strip("「」『』").strip()
-if not title:
-    title = f"第{episode_number}話"
+def convert_people(people):
+    return [
+        {
+            "name": person["name"].strip(),
+            "desc": person["description"].strip(),
+        }
+        for person in people
+    ]
 
-# 本文は【本文】マーカーから抽出する。マーカーが欠けた回に全文へフォールバックすると
-# タイトル・あらすじまで本文に混入するため、抽出できなければエラーで止める（壊れたデータを保存しない）。
-body = section("本文", story)
-if not body:
-    raise SystemExit(
-        "【本文】マーカーが見つからず本文を抽出できませんでした。"
-        f"出力フォーマットを確認してください:\n{story[:500]}"
-    )
-summary = section("今回のあらすじ", story) or title
-# 最終セクションは文末まで取り込むため、モデルが書き足した「更新日：…」等が
-# あらすじ末尾に紛れ込むことがある。除去しておく（次回以降の文脈に残さない）。
-summary = re.split(r"\s*更新日[：:]", summary)[0].strip()
 
-# ----- ストーリーバイブル更新 -----
-if episode_number == 1:
-    work_title = section_line("作品タイトル", story).strip("「」『』").strip()
-    bible["work_title"] = work_title or "無題の物語"
-    bible["world"] = section("世界観", story)
-    bible["characters"] = parse_people(section("登場人物", story))
-else:
-    existing = {p["name"] for p in bible.get("characters", [])}
-    for p in parse_people(section("新登場人物", story)):
-        if p["name"] not in existing:
-            bible.setdefault("characters", []).append(p)
-            existing.add(p["name"])
-
-bible.setdefault("synopsis", []).append(
-    f"第{episode_number}話「{title}」：{summary}"
-)
-
-# ----- 保存 -----
-stories.append({
-    "episode": episode_number,
-    "title": title,
-    "date": today,
-    "iso": today_iso,
-    "body": body,
-})
-
-# 新作を開始した回では、完結した前作を書庫へ確定保存する（生成成功後に行う）。
-if starting_new_work and completed_work is not None:
-    library.append(completed_work)
-    with open("library.json", "w", encoding="utf-8") as f:
-        json.dump(library, f, ensure_ascii=False, indent=2)
-
-with open("stories.json", "w", encoding="utf-8") as f:
-    json.dump(stories, f, ensure_ascii=False, indent=2)
-
-with open("bible.json", "w", encoding="utf-8") as f:
-    json.dump(bible, f, ensure_ascii=False, indent=2)
-
-# ----- RSS生成 -----
-# guid は作品をまたいで一意にする必要がある（新作はエピソード番号が1から振り直されるため、
-# 単なる ep-N だと前作と衝突し、購読者に新作が「既読」扱いで届かない）。
-# 完結済み作品数を現在作品のインデックスとして前置きする（連載中は値が変わらず安定）。
-work_index = len(library)
-items = ""
-for s in reversed(stories):
-    iso = s.get("iso") or today_iso
-    pub = (datetime.datetime.strptime(iso, "%Y-%m-%d")
-           .replace(tzinfo=JST)
-           .strftime("%a, %d %b %Y %H:%M:%S +0900"))
-    items += f"""
+def build_rss(site_url, total_episodes, stories, bible, library):
+    work_index = len(library)
+    items = ""
+    for story in reversed(stories):
+        published = (
+            datetime.datetime.strptime(story["iso"], "%Y-%m-%d")
+            .replace(tzinfo=JST)
+            .strftime("%a, %d %b %Y %H:%M:%S +0900")
+        )
+        items += f"""
     <item>
-      <title>第{s['episode']}話 {html.escape(s['title'])}</title>
-      <link>{SITE_URL}work.html?work={work_index}#ep{s['episode']}</link>
-      <guid isPermaLink="false">w{work_index}-ep-{s['episode']}</guid>
-      <pubDate>{pub}</pubDate>
-      <description>{html.escape(s['body'])}</description>
+      <title>第{story['episode']}話 {html.escape(story['title'])}</title>
+      <link>{site_url}work.html?work={work_index}#ep{story['episode']}</link>
+      <guid isPermaLink="false">w{work_index}-ep-{story['episode']}</guid>
+      <pubDate>{published}</pubDate>
+      <description>{html.escape(story['body'])}</description>
     </item>"""
 
-channel_title = bible.get("work_title") or "AI連載物語"
-rss = f"""<?xml version="1.0" encoding="UTF-8"?>
+    channel_title = bible.get("work_title") or "AI連載物語"
+    return f"""<?xml version="1.0" encoding="UTF-8"?>
 <rss version="2.0">
   <channel>
     <title>{html.escape(channel_title)}</title>
-    <link>{SITE_URL}</link>
-    <description>AIが毎週月曜に連載する全{TOTAL_EPISODES}話完結の物語</description>
+    <link>{site_url}</link>
+    <description>AIが毎週月曜に連載する全{total_episodes}話完結の物語</description>
     <language>ja</language>{items}
   </channel>
 </rss>"""
 
-with open("rss.xml", "w", encoding="utf-8") as f:
-    f.write(rss)
 
-print(f"完了：第{episode_number}話「{title}」（{len(body)}字）")
+def generate_updates(config, stories, bible, library, generate_content, now):
+    validate_state(stories, bible, library)
+    total_episodes, site_url = validate_config(config)
+    stories = copy.deepcopy(stories)
+    bible = copy.deepcopy(bible)
+    library = copy.deepcopy(library)
+    today = now.strftime("%Y年%m月%d日")
+    today_iso = now.strftime("%Y-%m-%d")
+    episode_number = len(stories) + 1
+    starting_new_work = episode_number > total_episodes
+    completed_work = None
+
+    if starting_new_work:
+        completed_work = {
+            "work_title": bible.get("work_title") or "無題の物語",
+            "completed": stories[-1].get("iso") or today_iso,
+            "total_episodes": len(stories),
+            "episodes": stories,
+        }
+        print(
+            f"前作「{completed_work['work_title']}」が全{total_episodes}話で完結。"
+            "新しい作品を開始します。"
+        )
+        stories = []
+        bible = fresh_bible()
+        episode_number = 1
+
+    prompt = build_prompt(
+        episode_number,
+        total_episodes,
+        today,
+        bible,
+        stories,
+    )
+    generated = generate_content(prompt, episode_number == 1)
+    errors = validate_story_payload(generated, episode_number == 1)
+    if errors:
+        raise SystemExit("生成結果が不正: " + "; ".join(errors))
+
+    title = normalize_title(generated["title"], episode_number)
+    body = generated["body"].strip()
+    summary = generated["summary"].strip()
+
+    if episode_number == 1:
+        work_title = generated["work_title"].strip().strip("「」『』").strip()
+        bible["work_title"] = work_title or "無題の物語"
+        bible["world"] = generated["world"].strip()
+        bible["characters"] = convert_people(generated["characters"])
+    else:
+        existing = {person["name"] for person in bible.get("characters", [])}
+        for person in convert_people(generated["new_characters"]):
+            if person["name"] not in existing:
+                bible.setdefault("characters", []).append(person)
+                existing.add(person["name"])
+
+    bible.setdefault("synopsis", []).append(
+        f"第{episode_number}話「{title}」：{summary}"
+    )
+    stories.append({
+        "episode": episode_number,
+        "title": title,
+        "date": today,
+        "iso": today_iso,
+        "body": body,
+    })
+    if completed_work is not None:
+        library.append(completed_work)
+
+    rss = build_rss(site_url, total_episodes, stories, bible, library)
+    return {
+        "stories": stories,
+        "bible": bible,
+        "library": library,
+        "rss": rss,
+        "episode_number": episode_number,
+        "title": title,
+        "body_length": len(body),
+    }
+
+
+def serialize_updates(updates):
+    return {
+        "stories.json": json.dumps(
+            updates["stories"], ensure_ascii=False, indent=2
+        ) + "\n",
+        "bible.json": json.dumps(
+            updates["bible"], ensure_ascii=False, indent=2
+        ) + "\n",
+        "library.json": json.dumps(
+            updates["library"], ensure_ascii=False, indent=2
+        ) + "\n",
+        "rss.xml": updates["rss"],
+    }
+
+
+def atomic_write_files(contents):
+    temporary_files = {}
+    try:
+        for filename, content in contents.items():
+            target = Path(filename)
+            with tempfile.NamedTemporaryFile(
+                mode="w",
+                encoding="utf-8",
+                newline="\n",
+                dir=target.parent,
+                prefix=f".{target.name}.",
+                suffix=".tmp",
+                delete=False,
+            ) as temporary:
+                temporary.write(content)
+                temporary.flush()
+                os.fsync(temporary.fileno())
+                temporary_files[target] = Path(temporary.name)
+
+        for target, temporary in temporary_files.items():
+            os.replace(temporary, target)
+    finally:
+        for temporary in temporary_files.values():
+            if temporary.exists():
+                temporary.unlink()
+
+
+def main():
+    config = load_json("config.json")
+    stories = load_json("stories.json")
+    bible = load_json("bible.json")
+    library = load_json("library.json")
+    validate_state(stories, bible, library)
+    api_key = os.environ.get("GEMINI_API_KEY")
+    if not api_key:
+        raise SystemExit("環境変数 GEMINI_API_KEY が設定されていません。")
+
+    updates = generate_updates(
+        config,
+        stories,
+        bible,
+        library,
+        lambda prompt, first_episode: fetch_story(
+            prompt,
+            first_episode,
+            api_key,
+        ),
+        datetime.datetime.now(JST),
+    )
+    atomic_write_files(serialize_updates(updates))
+    print(
+        f"完了：第{updates['episode_number']}話「{updates['title']}」"
+        f"（{updates['body_length']}字）"
+    )
+
+
+if __name__ == "__main__":
+    main()
