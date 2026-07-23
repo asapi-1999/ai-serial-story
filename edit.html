@@ -434,9 +434,11 @@
       renumber();
       validateForSave();
       syncBibleSynopsis();
-      await writeFile('stories.json', JSON.stringify(stories, null, 2));
-      await writeFile('bible.json', JSON.stringify(bible, null, 2));
-      await writeFile('rss.xml', buildRss(stories));
+      await writeFilesWithRollback({
+        'stories.json': JSON.stringify(stories, null, 2),
+        'bible.json': JSON.stringify(bible, null, 2),
+        'rss.xml': buildRss(stories)
+      });
       setStatus('保存しました ✅（stories.json / bible.json / rss.xml を上書き）— git push してください');
     } catch (err) {
       alert('保存に失敗しました：' + err);
@@ -448,6 +450,38 @@
     var w = await fh.createWritable();
     await w.write(content);
     await w.close();
+  }
+
+  async function writeFilesWithRollback(contents) {
+    var names = Object.keys(contents);
+    var originals = {};
+    var written = [];
+    for (var i = 0; i < names.length; i++) {
+      var originalHandle = await dirHandle.getFileHandle(names[i]);
+      originals[names[i]] = await (await originalHandle.getFile()).text();
+    }
+    try {
+      for (var j = 0; j < names.length; j++) {
+        written.push(names[j]);
+        await writeFile(names[j], contents[names[j]]);
+      }
+    } catch (writeError) {
+      var rollbackErrors = [];
+      for (var k = written.length - 1; k >= 0; k--) {
+        try {
+          await writeFile(written[k], originals[written[k]]);
+        } catch (rollbackError) {
+          rollbackErrors.push(written[k] + ': ' + rollbackError);
+        }
+      }
+      if (rollbackErrors.length) {
+        throw new Error(
+          '保存と復元の両方に失敗しました。対象: ' + rollbackErrors.join('; ')
+          + '／最初のエラー: ' + writeError
+        );
+      }
+      throw writeError;
+    }
   }
 
   // ===== ダウンロード（フォルダ未対応ブラウザ向けフォールバック）=====
