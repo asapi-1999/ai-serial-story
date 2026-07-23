@@ -19,6 +19,11 @@ jobs:
 
     steps:
       - uses: actions/checkout@v6
+        with:
+          ref: main
+
+      - name: Run Tests
+        run: python3 -m unittest discover -s tests
 
       - name: Generate Story with Gemini
         env:
@@ -33,5 +38,9 @@ jobs:
           git pull --rebase origin main
           git stash pop
           git add stories.json bible.json rss.xml library.json
-          git commit -m "AI物語を自動更新 $(date '+%Y-%m-%d')" || echo "変更なし"
-          git push
+          if git diff --cached --quiet; then
+            echo "変更なし"
+          else
+            git commit -m "AI物語を自動更新 $(date '+%Y-%m-%d')"
+            git push origin HEAD:main
+          fi

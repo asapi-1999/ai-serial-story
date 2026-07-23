@@ -32,7 +32,7 @@
 <body>
   <a class="back" href="index.html">← 作品一覧へ</a>
   <header class="work">
-    <p class="series-label">📜 全5話完結の連載小説</p>
+    <p class="series-label" id="series-label">📜 連載小説</p>
     <h1 class="work-title" id="work-title"></h1>
   </header>
   <p class="work-status" id="work-status"></p>
@@ -40,7 +40,7 @@
 
   <script src="render.js"></script>
   <script>
-    var TOTAL_EPISODES = 5;
+    var TOTAL_EPISODES;
 
     function fetchJson(path) {
       return fetch(path, { cache: 'no-store' }).then(function (r) {
@@ -57,14 +57,22 @@
     // 作品IDは安定インデックス（?work=N）。連載中の作品は N = 完結済み作品数。
     // その作品が完結して書庫へ移っても N は変わらないため、同じURLで参照し続けられる。
     Promise.all([
+      fetchJson('config.json'),
       fetchJson('bible.json'),
       fetchJson('stories.json'),
       fetchJson('library.json')
     ])
       .then(function (results) {
-        var bible = results[0] || {};
-        var stories = results[1] || [];
-        var library = results[2] || [];
+        var config = results[0] || {};
+        var bible = results[1] || {};
+        var stories = results[2] || [];
+        var library = results[3] || [];
+        TOTAL_EPISODES = config.total_episodes;
+        if (!Number.isInteger(TOTAL_EPISODES) || TOTAL_EPISODES < 1) {
+          throw new Error('config.json: total_episodes が不正です');
+        }
+        document.getElementById('series-label').textContent =
+          '📜 全' + TOTAL_EPISODES + '話完結の連載小説';
 
         var currentIndex = library.length;   // 連載中の作品のインデックス
         var raw = getParam('work');
@@ -73,9 +81,17 @@
 
         var data;
         if (isCurrent) {
-          data = { title: bible.work_title || '無題の物語', episodes: stories };
+          data = {
+            title: bible.work_title || '無題の物語',
+            episodes: stories,
+            totalEpisodes: TOTAL_EPISODES
+          };
         } else if (library[idx]) {
-          data = { title: library[idx].work_title, episodes: library[idx].episodes || [] };
+          data = {
+            title: library[idx].work_title,
+            episodes: library[idx].episodes || [],
+            totalEpisodes: library[idx].total_episodes || (library[idx].episodes || []).length
+          };
         } else {
           data = null;
         }
@@ -89,9 +105,9 @@
 
         document.title = stripRuby(data.title);   // タブ名はルビ記号を外した素のテキスト
         renderRuby(document.getElementById('work-title'), data.title);
-        var done = data.episodes.length >= TOTAL_EPISODES;
+        var done = data.episodes.length >= data.totalEpisodes;
         document.getElementById('work-status').textContent =
-          '全' + TOTAL_EPISODES + '話' + (done ? '・完結' : '（第' + data.episodes.length + '話まで公開中）');
+          '全' + data.totalEpisodes + '話' + (done ? '・完結' : '（第' + data.episodes.length + '話まで公開中）');
 
         var box = document.getElementById('episodes');
         data.episodes.forEach(function (p) {

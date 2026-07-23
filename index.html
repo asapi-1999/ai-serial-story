@@ -37,7 +37,7 @@
 <body>
   <header class="home">
     <h1>📚 AI連載物語</h1>
-    <p class="tagline">AIが毎週月曜に紡ぐ、全5話完結の物語<a class="rss" href="rss.xml">RSS</a></p>
+    <p class="tagline">AIが毎週月曜に紡ぐ、全<span id="total-episodes">-</span>話完結の物語<a class="rss" href="rss.xml">RSS</a></p>
   </header>
 
   <section>
@@ -52,7 +52,7 @@
 
   <script src="render.js"></script>
   <script>
-    var TOTAL_EPISODES = 5;
+    var TOTAL_EPISODES;
 
     function fetchJson(path) {
       return fetch(path, { cache: 'no-store' }).then(function (r) {
@@ -85,14 +85,21 @@
     }
 
     Promise.all([
+      fetchJson('config.json'),
       fetchJson('bible.json'),
       fetchJson('stories.json'),
       fetchJson('library.json')
     ])
       .then(function (results) {
-        var bible = results[0] || {};
-        var stories = results[1] || [];
-        var library = results[2] || [];
+        var config = results[0] || {};
+        var bible = results[1] || {};
+        var stories = results[2] || [];
+        var library = results[3] || [];
+        TOTAL_EPISODES = config.total_episodes;
+        if (!Number.isInteger(TOTAL_EPISODES) || TOTAL_EPISODES < 1) {
+          throw new Error('config.json: total_episodes が不正です');
+        }
+        document.getElementById('total-episodes').textContent = TOTAL_EPISODES;
 
         // 連載中の作品
         var current = document.getElementById('current');

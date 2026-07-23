@@ -1,5 +1,6 @@
 import urllib.request
 import urllib.error
+import http.client
 import json
 import os
 import datetime
@@ -7,104 +8,48 @@ import re
 import time
 import html
 
+from story_utils import load_json, missing_story_sections, section, section_line, validate_config
+
 JST = datetime.timezone(datetime.timedelta(hours=9))
 now = datetime.datetime.now(JST)
 today = now.strftime("%Y年%m月%d日")
 today_iso = now.strftime("%Y-%m-%d")
-
-# GitHub Pages の公開URL（RSSのリンク用）。Pages の設定に合わせて調整する。
-SITE_URL = "https://asapi-1999.github.io/ai-serial-story/"
-
-
-def load_json(path, default):
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except FileNotFoundError:
-        return default
-    except (json.JSONDecodeError, UnicodeDecodeError) as e:
-        raise SystemExit(f"{path} を読み込めません。JSON形式を確認してください: {e}") from e
 
 
 def fresh_bible():
     return {"work_title": "", "world": "", "characters": [], "synopsis": []}
 
 
-stories = load_json("stories.json", [])
-bible = load_json("bible.json", fresh_bible())
-library = load_json("library.json", [])
+config = load_json("config.json")
+stories = load_json("stories.json")
+bible = load_json("bible.json")
+library = load_json("library.json")
 if not isinstance(stories, list):
     raise SystemExit("stories.json のルートは配列である必要があります。")
 if not isinstance(bible, dict):
     raise SystemExit("bible.json のルートはオブジェクトである必要があります。")
 if not isinstance(library, list):
     raise SystemExit("library.json のルートは配列である必要があります。")
+
+TOTAL_EPISODES, SITE_URL = validate_config(config)
+
 episode_number = len(stories) + 1
 
-# 全5話で完結する連載。完結済みなら、その作品を書庫(library.json)へ退避し、
+# 設定した話数で完結する連載。完結済みなら、その作品を書庫(library.json)へ退避し、
 # 新しい作品を第1話から始める。退避の確定（ファイル書き込み）は生成成功後に行う。
-TOTAL_EPISODES = 5
 starting_new_work = episode_number > TOTAL_EPISODES
 completed_work = None
 if starting_new_work:
     completed_work = {
         "work_title": bible.get("work_title") or "無題の物語",
         "completed": stories[-1].get("iso") or today_iso,
+        "total_episodes": TOTAL_EPISODES,
         "episodes": stories,
     }
     print(f"前作「{completed_work['work_title']}」が全{TOTAL_EPISODES}話で完結。新しい作品を開始します。")
     stories = []
     bible = fresh_bible()
     episode_number = 1
-
-
-SECTION_TAGS = (
-    "作品タイトル",
-    "タイトル",
-    "本文",
-    "世界観",
-    "登場人物",
-    "今回のあらすじ",
-    "新登場人物",
-)
-SECTION_TAG_PATTERN = "|".join(re.escape(name) for name in SECTION_TAGS)
-
-
-def section(tag, text):
-    """【タグ】の中身を次の既知のセクションまたは末尾まで取り出す。"""
-    m = re.search(
-        rf"^【{re.escape(tag)}】[ \t　]*(.*?)(?=^【(?:{SECTION_TAG_PATTERN})】|\Z)",
-        text,
-        re.MULTILINE | re.DOTALL,
-    )
-    return m.group(1).strip() if m else ""
-
-
-def section_line(tag, text):
-    """【タグ】と同じ行の中身だけを取り出す（タイトルなど1行用）。
-    改行や次の【…】で必ず打ち切るので、本文を巻き込まない。"""
-    m = re.search(
-        rf"^【{re.escape(tag)}】[ \t　]*([^\r\n]*)",
-        text,
-        re.MULTILINE,
-    )
-    return m.group(1).strip() if m else ""
-
-
-def missing_story_sections(text, first_episode):
-    """話数に応じた必須セクションのうち、欠けているものを返す。"""
-    required = ["タイトル", "本文", "今回のあらすじ"]
-    if first_episode:
-        required = ["作品タイトル", *required, "世界観", "登場人物"]
-    else:
-        required.append("新登場人物")
-
-    missing = []
-    for tag in required:
-        value = section_line(tag, text) if tag in ("作品タイトル", "タイトル") else section(tag, text)
-        if not value:
-            missing.append(f"【{tag}】")
-    return missing
 
 
 def parse_people(text):
@@ -247,8 +192,17 @@ def fetch_story(prompt_text):
             )
             with urllib.request.urlopen(req, timeout=120) as r:
                 res = json.loads(r.read())
-        except urllib.error.URLError as e:
+        except (
+            urllib.error.URLError,
+            TimeoutError,
+            http.client.HTTPException,
+            json.JSONDecodeError,
+            UnicodeDecodeError,
+        ) as e:
             last_err = f"API呼び出し失敗: {e}"
+            continue
+        if not isinstance(res, dict):
+            last_err = "API応答のルートがオブジェクトではありません"
             continue
         # --- 応答の検証（不調なら次の試行へ）---
         candidates = res.get("candidates")

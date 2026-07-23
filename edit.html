@@ -44,8 +44,8 @@
 <body>
   <h1>📝 物語エディタ（ローカル編集用）</h1>
   <p class="note">
-    このページは<strong>公開サイトには影響しません</strong>。手元で <code>stories.json</code> を直接編集するための管理用です。<br>
-    ① <strong>「フォルダを開く」</strong>でこのリポジトリのフォルダを選択 → 各話を編集 → <strong>「保存」</strong>で <code>stories.json</code> と <code>rss.xml</code> を上書き → あとは <code>git push</code> するだけ。<br>
+    このページは<strong>公開サイトには影響しません</strong>。手元で物語と次回生成用のあらすじを編集するための管理用です。<br>
+    ① <strong>「フォルダを開く」</strong>でこのリポジトリのフォルダを選択 → 各話を編集 → <strong>「保存」</strong>で <code>stories.json</code>・<code>bible.json</code>・<code>rss.xml</code> を上書き → あとは <code>git push</code> するだけ。<br>
     ルビ記法：<code>漢字《よみ》</code>（漢字列に自動付与）／ <code>｜親文字《よみ》</code>（ひらがな等を含む親文字を明示）。
   </p>
 
@@ -61,10 +61,12 @@
   <div id="list"></div>
 
 <script>
-  var SITE_URL = "https://asapi-1999.github.io/ai-serial-story/";
+  var SITE_URL = '';
+  var TOTAL_EPISODES = 0;
   var stories = [];
   var bible = {};
   var library = [];
+  var synopses = [];
   var dirHandle = null;          // フォルダハンドル（File System Access API）
   var supportsFs = !!window.showDirectoryPicker;
 
@@ -122,7 +124,7 @@
       '  <channel>\n' +
       '    <title>' + htmlEscape(channelTitle) + '</title>\n' +
       '    <link>' + SITE_URL + '</link>\n' +
-      '    <description>AIが毎週月曜に連載する全5話完結の物語</description>\n' +
+      '    <description>AIが毎週月曜に連載する全' + TOTAL_EPISODES + '話完結の物語</description>\n' +
       '    <language>ja</language>' + items + '\n' +
       '  </channel>\n' +
       '</rss>';
@@ -172,7 +174,9 @@
     down.disabled = (i === stories.length - 1);
     var del = mkBtn('🗑 削除', function () {
       if (confirm('第' + s.episode + '話「' + s.title + '」を削除します。よろしいですか？')) {
-        stories.splice(i, 1); render();
+        stories.splice(i, 1);
+        synopses.splice(i, 1);
+        render();
       }
     });
     del.className = 'danger';
@@ -186,6 +190,16 @@
     row.appendChild(field('更新日（表示用）', s.date, function (v) { s.date = v; }, '例：2026年06月05日'));
     row.appendChild(field('日付（iso・RSS用）', s.iso, function (v) { s.iso = v; }, '例：2026-06-05'));
     card.appendChild(row);
+
+    var summaryRow = document.createElement('div');
+    summaryRow.className = 'row';
+    summaryRow.appendChild(field(
+      '今回のあらすじ（次回生成用）',
+      synopses[i],
+      function (v) { synopses[i] = v; },
+      'この話の内容を1文で要約'
+    ));
+    card.appendChild(summaryRow);
 
     // 本文
     var blabel = document.createElement('label');
@@ -249,6 +263,7 @@
     var j = i + dir;
     if (j < 0 || j >= stories.length) return;
     var tmp = stories[i]; stories[i] = stories[j]; stories[j] = tmp;
+    var synopsis = synopses[i]; synopses[i] = synopses[j]; synopses[j] = synopsis;
     render();
   }
 
@@ -272,9 +287,34 @@
       throw new Error('bible.json のルートはオブジェクトである必要があります');
     }
     if (!Array.isArray(loaded[2])) throw new Error('library.json のルートは配列である必要があります');
+    if (!loaded[3] || Array.isArray(loaded[3]) || typeof loaded[3] !== 'object') {
+      throw new Error('config.json のルートはオブジェクトである必要があります');
+    }
+    if (!Number.isInteger(loaded[3].total_episodes) || loaded[3].total_episodes < 1) {
+      throw new Error('config.json の total_episodes は1以上の整数である必要があります');
+    }
+    if (typeof loaded[3].site_url !== 'string' || !loaded[3].site_url.trim()) {
+      throw new Error('config.json の site_url は空でない文字列である必要があります');
+    }
     stories = loaded[0];
     bible = loaded[1];
     library = loaded[2];
+    TOTAL_EPISODES = loaded[3].total_episodes;
+    SITE_URL = loaded[3].site_url.trim().replace(/\/+$/, '') + '/';
+    var saved = Array.isArray(bible.synopsis) ? bible.synopsis : [];
+    synopses = stories.map(function (story, i) { return extractSummary(saved[i], story); });
+  }
+
+  function extractSummary(line, story) {
+    if (typeof line !== 'string') return '';
+    var prefix = '第' + story.episode + '話「' + story.title + '」：';
+    return line.indexOf(prefix) === 0 ? line.slice(prefix.length) : line;
+  }
+
+  function syncBibleSynopsis() {
+    bible.synopsis = stories.map(function (story, i) {
+      return '第' + story.episode + '話「' + story.title + '」：' + (synopses[i] || '（要約未入力）');
+    });
   }
 
   document.getElementById('openBtn').addEventListener('click', async function () {
@@ -284,7 +324,8 @@
       var loaded = await Promise.all([
         readJsonFile('stories.json'),
         readJsonFile('bible.json'),
-        readJsonFile('library.json')
+        readJsonFile('library.json'),
+        readJsonFile('config.json')
       ]);
       useLoadedData(loaded);
       render();
@@ -300,7 +341,8 @@
     Promise.all([
       fetchJson('stories.json'),
       fetchJson('bible.json'),
-      fetchJson('library.json')
+      fetchJson('library.json'),
+      fetchJson('config.json')
     ])
       .then(function (loaded) {
         useLoadedData(loaded);
@@ -314,6 +356,7 @@
   // ===== 追加 =====
   document.getElementById('addBtn').addEventListener('click', function () {
     stories.push({ episode: stories.length + 1, title: '新しい話', date: '', iso: '', body: '' });
+    synopses.push('');
     render();
   });
 
@@ -321,10 +364,12 @@
   document.getElementById('saveBtn').addEventListener('click', async function () {
     if (!dirHandle) { alert('フォルダが開かれていません。'); return; }
     renumber();
+    syncBibleSynopsis();
     try {
       await writeFile('stories.json', JSON.stringify(stories, null, 2));
+      await writeFile('bible.json', JSON.stringify(bible, null, 2));
       await writeFile('rss.xml', buildRss(stories));
-      setStatus('保存しました ✅（stories.json / rss.xml を上書き）— git push してください');
+      setStatus('保存しました ✅（stories.json / bible.json / rss.xml を上書き）— git push してください');
     } catch (err) {
       alert('保存に失敗しました：' + err);
     }
@@ -340,7 +385,9 @@
   // ===== ダウンロード（フォルダ未対応ブラウザ向けフォールバック）=====
   document.getElementById('downloadBtn').addEventListener('click', function () {
     renumber();
+    syncBibleSynopsis();
     download('stories.json', JSON.stringify(stories, null, 2), 'application/json');
+    download('bible.json', JSON.stringify(bible, null, 2), 'application/json');
     download('rss.xml', buildRss(stories), 'application/xml');
     setStatus('ダウンロードしました ⬇（リポジトリ内のファイルを差し替えて git push）');
   });

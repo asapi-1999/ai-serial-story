@@ -33,7 +33,7 @@
 
   <script src="render.js"></script>
   <script>
-    var TOTAL_EPISODES = 5;
+    var TOTAL_EPISODES;
 
     function fetchJson(path) {
       return fetch(path, { cache: 'no-store' }).then(function (r) {
@@ -43,14 +43,20 @@
     }
 
     Promise.all([
+      fetchJson('config.json'),
       fetchJson('bible.json'),
       fetchJson('stories.json'),
       fetchJson('library.json')
     ])
       .then(function (results) {
-        var bible = results[0] || {};
-        var stories = results[1] || [];
-        var library = results[2] || [];
+        var config = results[0] || {};
+        var bible = results[1] || {};
+        var stories = results[2] || [];
+        var library = results[3] || [];
+        TOTAL_EPISODES = config.total_episodes;
+        if (!Number.isInteger(TOTAL_EPISODES) || TOTAL_EPISODES < 1) {
+          throw new Error('config.json: total_episodes が不正です');
+        }
         var latest = document.getElementById('latest');
 
         if (!stories.length) {
