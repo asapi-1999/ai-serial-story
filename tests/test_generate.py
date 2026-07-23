@@ -3,6 +3,7 @@ import datetime
 import json
 import tempfile
 import unittest
+import urllib.error
 from pathlib import Path
 from unittest import mock
 
@@ -95,6 +96,10 @@ class StructuredOutputTests(unittest.TestCase):
             generation_config = request_body["generationConfig"]
             self.assertEqual(generation_config["responseMimeType"], "application/json")
             self.assertIn("responseJsonSchema", generation_config)
+            self.assertEqual(
+                generation_config["thinkingConfig"],
+                {"thinkingLevel": "medium"},
+            )
             return FakeResponse(next(responses))
 
         result = fetch_story(
@@ -107,6 +112,61 @@ class StructuredOutputTests(unittest.TestCase):
 
         self.assertEqual(result, CONTINUATION)
         self.assertEqual(waits, [5, 10])
+
+    def test_fetch_story_falls_back_to_2_5_flash_on_rate_limit(self):
+        calls = []
+
+        def urlopen(request, timeout):
+            calls.append((request.full_url, json.loads(request.data)))
+            if "gemini-3.5-flash" in request.full_url:
+                raise urllib.error.HTTPError(
+                    request.full_url,
+                    429,
+                    "Too Many Requests",
+                    None,
+                    None,
+                )
+            return FakeResponse(api_response(json.dumps(CONTINUATION)))
+
+        result = fetch_story(
+            "prompt",
+            False,
+            "test-key",
+            urlopen=urlopen,
+            sleep=lambda seconds: None,
+        )
+
+        self.assertEqual(result, CONTINUATION)
+        self.assertEqual(len(calls), 2)
+        self.assertIn("gemini-3.5-flash", calls[0][0])
+        self.assertEqual(
+            calls[0][1]["generationConfig"]["thinkingConfig"],
+            {"thinkingLevel": "medium"},
+        )
+        self.assertIn("gemini-2.5-flash", calls[1][0])
+        self.assertEqual(
+            calls[1][1]["generationConfig"]["thinkingConfig"],
+            {"thinkingBudget": 2048},
+        )
+
+    def test_fetch_story_does_not_fall_back_for_invalid_content(self):
+        urls = []
+
+        def urlopen(request, timeout):
+            urls.append(request.full_url)
+            return FakeResponse(api_response("not-json"))
+
+        with self.assertRaisesRegex(SystemExit, f"{ATTEMPTS}回失敗"):
+            fetch_story(
+                "prompt",
+                False,
+                "test-key",
+                urlopen=urlopen,
+                sleep=lambda seconds: None,
+            )
+
+        self.assertEqual(len(urls), ATTEMPTS)
+        self.assertTrue(all("gemini-3.5-flash" in url for url in urls))
 
     def test_fetch_story_fails_after_all_invalid_responses(self):
         def urlopen(request, timeout):

@@ -16,7 +16,11 @@ from story_utils import load_json, validate_config
 
 JST = datetime.timezone(datetime.timedelta(hours=9))
 ATTEMPTS = 4
-MODEL = "gemini-2.5-flash"
+MODEL_OPTIONS = (
+    ("gemini-3.5-flash", {"thinkingLevel": "medium"}),
+    ("gemini-2.5-flash", {"thinkingBudget": 2048}),
+)
+FALLBACK_HTTP_CODES = frozenset({404, 408, 429, 500, 502, 503, 504})
 
 RUBY_GUIDE = (
     "・難読な漢字・固有名詞・印象づけたい語にはルビ（ふりがな）を振ってよい。\n"
@@ -215,88 +219,110 @@ def fetch_story(
     urlopen=urllib.request.urlopen,
     sleep=time.sleep,
 ):
-    payload = json.dumps({
-        "contents": [{"parts": [{"text": prompt_text}]}],
-        "generationConfig": {
-            "maxOutputTokens": 12000,
-            "thinkingConfig": {"thinkingBudget": 2048},
-            "responseMimeType": "application/json",
-            "responseJsonSchema": story_response_schema(first_episode),
-        },
-    }, ensure_ascii=False).encode("utf-8")
-    url = (
-        "https://generativelanguage.googleapis.com/v1beta/"
-        f"models/{MODEL}:generateContent"
-    )
     last_err = None
+    total_attempts = 0
+    for model_index, (model, thinking_config) in enumerate(MODEL_OPTIONS):
+        has_fallback = model_index < len(MODEL_OPTIONS) - 1
+        fallback_eligible = False
+        payload = json.dumps({
+            "contents": [{"parts": [{"text": prompt_text}]}],
+            "generationConfig": {
+                "maxOutputTokens": 12000,
+                "thinkingConfig": thinking_config,
+                "responseMimeType": "application/json",
+                "responseJsonSchema": story_response_schema(first_episode),
+            },
+        }, ensure_ascii=False).encode("utf-8")
+        url = (
+            "https://generativelanguage.googleapis.com/v1beta/"
+            f"models/{model}:generateContent"
+        )
 
-    for attempt in range(ATTEMPTS):
-        if attempt:
-            wait = 5 * attempt
-            print(f"再試行（{attempt + 1}/{ATTEMPTS}）… {wait}秒待機。直前の理由: {last_err}")
-            sleep(wait)
-        try:
-            req = urllib.request.Request(
-                url,
-                data=payload,
-                headers={
-                    "Content-Type": "application/json",
-                    "x-goog-api-key": api_key,
-                },
-            )
-            with urlopen(req, timeout=120) as response:
-                result = json.loads(response.read())
-        except (
-            urllib.error.URLError,
-            TimeoutError,
-            http.client.HTTPException,
-            json.JSONDecodeError,
-            UnicodeDecodeError,
-        ) as exc:
-            last_err = f"API呼び出し失敗: {exc}"
-            continue
+        for attempt in range(ATTEMPTS):
+            if attempt:
+                wait = 5 * attempt
+                print(
+                    f"{model} 再試行（{attempt + 1}/{ATTEMPTS}）… "
+                    f"{wait}秒待機。直前の理由: {last_err}"
+                )
+                sleep(wait)
+            try:
+                total_attempts += 1
+                req = urllib.request.Request(
+                    url,
+                    data=payload,
+                    headers={
+                        "Content-Type": "application/json",
+                        "x-goog-api-key": api_key,
+                    },
+                )
+                with urlopen(req, timeout=120) as response:
+                    result = json.loads(response.read())
+            except urllib.error.HTTPError as exc:
+                last_err = f"API呼び出し失敗: HTTP {exc.code} {exc.reason}"
+                fallback_eligible = exc.code in FALLBACK_HTTP_CODES
+                if has_fallback and fallback_eligible:
+                    break
+                continue
+            except (
+                urllib.error.URLError,
+                TimeoutError,
+                http.client.HTTPException,
+                json.JSONDecodeError,
+                UnicodeDecodeError,
+            ) as exc:
+                last_err = f"API呼び出し失敗: {exc}"
+                fallback_eligible = True
+                continue
 
-        if not isinstance(result, dict):
-            last_err = "API応答のルートがオブジェクトではありません"
-            continue
-        candidates = result.get("candidates")
-        if not candidates:
-            last_err = f"候補ゼロ（promptFeedback={result.get('promptFeedback', {})}）"
-            continue
-        candidate = candidates[0]
-        if not isinstance(candidate, dict):
-            last_err = "候補がオブジェクトではありません"
-            continue
-        finish = candidate.get("finishReason", "")
-        if finish != "STOP":
-            detail = candidate.get("finishMessage")
-            last_err = f"生成が正常終了しませんでした（finishReason={finish or 'なし'}"
-            if detail:
-                last_err += f", finishMessage={detail}"
-            last_err += "）"
-            continue
+            fallback_eligible = False
+            if not isinstance(result, dict):
+                last_err = "API応答のルートがオブジェクトではありません"
+                continue
+            candidates = result.get("candidates")
+            if not candidates:
+                last_err = f"候補ゼロ（promptFeedback={result.get('promptFeedback', {})}）"
+                continue
+            candidate = candidates[0]
+            if not isinstance(candidate, dict):
+                last_err = "候補がオブジェクトではありません"
+                continue
+            finish = candidate.get("finishReason", "")
+            if finish != "STOP":
+                detail = candidate.get("finishMessage")
+                last_err = f"生成が正常終了しませんでした（finishReason={finish or 'なし'}"
+                if detail:
+                    last_err += f", finishMessage={detail}"
+                last_err += "）"
+                continue
 
-        parts = candidate.get("content", {}).get("parts") or []
-        response_text = "".join(
-            part.get("text", "")
-            for part in parts
-            if isinstance(part, dict) and not part.get("thought")
-        ).strip()
-        if not response_text:
-            last_err = "構造化出力が取得できませんでした"
-            continue
-        try:
-            story = json.loads(response_text)
-        except json.JSONDecodeError as exc:
-            last_err = f"構造化出力のJSON解析失敗: {exc}"
-            continue
-        errors = validate_story_payload(story, first_episode)
-        if errors:
-            last_err = "構造化出力が不正: " + "; ".join(errors)
-            continue
-        return story
+            parts = candidate.get("content", {}).get("parts") or []
+            response_text = "".join(
+                part.get("text", "")
+                for part in parts
+                if isinstance(part, dict) and not part.get("thought")
+            ).strip()
+            if not response_text:
+                last_err = "構造化出力が取得できませんでした"
+                continue
+            try:
+                story = json.loads(response_text)
+            except json.JSONDecodeError as exc:
+                last_err = f"構造化出力のJSON解析失敗: {exc}"
+                continue
+            errors = validate_story_payload(story, first_episode)
+            if errors:
+                last_err = "構造化出力が不正: " + "; ".join(errors)
+                continue
+            return story
 
-    raise SystemExit(f"Gemini生成に{ATTEMPTS}回失敗しました。最後の理由: {last_err}")
+        if has_fallback and fallback_eligible:
+            next_model = MODEL_OPTIONS[model_index + 1][0]
+            print(f"{model} を利用できないため {next_model} に切り替えます: {last_err}")
+            continue
+        break
+
+    raise SystemExit(f"Gemini生成に{total_attempts}回失敗しました。最後の理由: {last_err}")
 
 
 def normalize_title(title, episode_number):
