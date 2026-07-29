@@ -19,6 +19,13 @@
     header.home h1 { font-size: 1.8em; color: #5a3e1b; margin: 0 0 6px; }
     .tagline { color: #c8a96e; font-size: 0.85em; margin: 0; }
     .rss { font-size: 0.8em; color: #c8a96e; text-decoration: none; margin-left: 6px; }
+    .site-nav { display: flex; justify-content: center; gap: 8px; margin-top: 18px; }
+    .site-nav a {
+      color: #7b6545; text-decoration: none; font-size: 0.88em; font-weight: bold;
+      padding: 7px 14px; border: 1px solid #e3d5bd; border-radius: 999px; background: #fff;
+    }
+    .site-nav a[aria-current="page"] { color: #fff; border-color: #c8a96e; background: #c8a96e; }
+    .site-nav a:hover { border-color: #c8a96e; }
     h2.section-title { font-size: 1.1em; color: #5a3e1b; border-bottom: 2px solid #c8a96e; padding-bottom: 6px; margin-top: 36px; }
     .card {
       display: block; text-decoration: none; color: inherit;
@@ -38,6 +45,10 @@
   <header class="home">
     <h1>📚 AI連載物語</h1>
     <p class="tagline">AIが毎週月曜に紡ぐ、全<span id="total-episodes">-</span>話完結の物語<a class="rss" href="rss.xml">RSS</a></p>
+    <nav class="site-nav" aria-label="コンテンツ">
+      <a href="index.html" aria-current="page">📚 小説</a>
+      <a href="games.html">🎮 ゲーム</a>
+    </nav>
   </header>
 
   <section>

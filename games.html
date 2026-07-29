@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ゲーム一覧 | AI連載物語</title>
+  <style>
+    body {
+      font-family: 'Hiragino Sans', 'Noto Sans JP', sans-serif;
+      max-width: 680px;
+      margin: 0 auto;
+      padding: 30px 20px;
+      line-height: 1.8;
+      color: #2c2c2c;
+      background: #fdf9f3;
+    }
+    header.home { text-align: center; margin-bottom: 30px; }
+    header.home h1 { font-size: 1.8em; color: #315d46; margin: 0 0 6px; }
+    .tagline { color: #799585; font-size: 0.85em; margin: 0; }
+    .site-nav { display: flex; justify-content: center; gap: 8px; margin-top: 18px; }
+    .site-nav a {
+      color: #526d5e; text-decoration: none; font-size: 0.88em; font-weight: bold;
+      padding: 7px 14px; border: 1px solid #cdddcf; border-radius: 999px; background: #fff;
+    }
+    .site-nav a[aria-current="page"] { color: #fff; border-color: #5f9272; background: #5f9272; }
+    .site-nav a:hover { border-color: #5f9272; }
+    h2.section-title {
+      font-size: 1.1em; color: #315d46; border-bottom: 2px solid #7eb18d;
+      padding-bottom: 6px; margin: 0;
+    }
+    .game-card {
+      display: grid; grid-template-columns: 68px 1fr; gap: 15px; align-items: center;
+      text-decoration: none; color: inherit; background: #fff; border-radius: 12px;
+      padding: 18px 20px; margin-top: 14px; box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+      transition: transform .08s ease, box-shadow .08s ease;
+    }
+    .game-card:hover { transform: translateY(-2px); box-shadow: 0 4px 14px rgba(0,0,0,0.10); }
+    .game-card:focus-visible { outline: 3px solid rgba(95,146,114,.35); outline-offset: 3px; }
+    .game-icon {
+      display: grid; place-items: center; width: 68px; height: 68px; border-radius: 18px;
+      font-size: 2em; background: linear-gradient(135deg, #e4f2df, #e5f4fb);
+    }
+    .game-title { color: #315d46; font-size: 1.15em; font-weight: bold; line-height: 1.5; }
+    .game-description { color: #666; font-size: 0.88em; line-height: 1.6; margin-top: 3px; }
+    .game-meta { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 9px; }
+    .tag {
+      color: #5e7668; background: #edf5ef; border-radius: 999px;
+      padding: 2px 8px; font-size: 0.72em; line-height: 1.6;
+    }
+    .play { color: #4f8b63; font-size: 0.82em; font-weight: bold; margin-top: 8px; }
+    .empty { color: #999; }
+    .admin-link { text-align: center; margin-top: 32px; font-size: 0.78em; }
+    .admin-link a { color: #82958a; }
+    @media (max-width: 480px) {
+      .game-card { grid-template-columns: 52px 1fr; gap: 12px; padding: 16px; }
+      .game-icon { width: 52px; height: 52px; border-radius: 14px; font-size: 1.6em; }
+    }
+  </style>
+</head>
+<body>
+  <header class="home">
+    <h1>🎮 ゲーム</h1>
+    <p class="tagline">短い時間で遊べる、HTMLミニゲーム置き場</p>
+    <nav class="site-nav" aria-label="コンテンツ">
+      <a href="index.html">📚 小説</a>
+      <a href="games.html" aria-current="page">🎮 ゲーム</a>
+    </nav>
+  </header>
+
+  <main>
+    <h2 class="section-title">ゲーム一覧</h2>
+    <div id="games" aria-live="polite"></div>
+    <p class="admin-link"><a href="game-admin.html">ゲームを登録する</a></p>
+  </main>
+
+  <script>
+    function makeTag(text) {
+      var tag = document.createElement('span');
+      tag.className = 'tag';
+      tag.textContent = text;
+      return tag;
+    }
+
+    function makeGameCard(game) {
+      var card = document.createElement('a');
+      card.className = 'game-card';
+      card.href = game.path;
+      card.setAttribute('aria-label', game.title + 'を遊ぶ');
+
+      var icon = document.createElement('div');
+      icon.className = 'game-icon';
+      icon.setAttribute('aria-hidden', 'true');
+      icon.textContent = game.icon || '🎮';
+
+      var body = document.createElement('div');
+      var title = document.createElement('div');
+      title.className = 'game-title';
+      title.textContent = game.title;
+
+      var description = document.createElement('div');
+      description.className = 'game-description';
+      description.textContent = game.description;
+
+      var meta = document.createElement('div');
+      meta.className = 'game-meta';
+      if (game.genre) meta.appendChild(makeTag(game.genre));
+      (game.devices || []).forEach(function (device) {
+        meta.appendChild(makeTag(device));
+      });
+      if (game.duration) meta.appendChild(makeTag(game.duration));
+
+      var play = document.createElement('div');
+      play.className = 'play';
+      play.textContent = 'あそぶ →';
+
+      body.append(title, description, meta, play);
+      card.append(icon, body);
+      return card;
+    }
+
+    fetch('games.json', { cache: 'no-store' })
+      .then(function (response) {
+        if (!response.ok) throw new Error('games.json: HTTP ' + response.status);
+        return response.json();
+      })
+      .then(function (games) {
+        var box = document.getElementById('games');
+        if (!Array.isArray(games) || !games.length) {
+          box.innerHTML = '<p class="empty">ゲームは準備中です。</p>';
+          return;
+        }
+        games.slice().reverse().forEach(function (game) {
+          box.appendChild(makeGameCard(game));
+        });
+      })
+      .catch(function () {
+        document.getElementById('games').innerHTML =
+          '<p class="empty">ゲーム一覧の読み込みに失敗しました。</p>';
+      });
+  </script>
+</body>
+</html>

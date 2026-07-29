@@ -1,0 +1,602 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="robots" content="noindex,nofollow">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self' https://api.github.com; frame-src blob:; img-src 'self' data:; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>ゲーム登録 | AI連載物語</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      font-family: 'Hiragino Sans', 'Noto Sans JP', sans-serif;
+      max-width: 860px; margin: 0 auto; padding: 26px 18px 70px;
+      line-height: 1.7; color: #29352e; background: #f7f6ef;
+    }
+    a { color: #3e7953; }
+    .back { display: inline-block; margin-bottom: 12px; color: #6b7c70; text-decoration: none; }
+    h1 { color: #315d46; font-size: 1.55em; margin: 0 0 6px; }
+    h2 { color: #315d46; font-size: 1.02em; margin: 0 0 14px; }
+    .lead { color: #718077; font-size: 0.88em; margin: 0 0 22px; }
+    .notice {
+      color: #66552e; background: #fff9e9; border: 1px solid #ead9a9;
+      border-radius: 10px; padding: 12px 15px; font-size: 0.84em; margin-bottom: 18px;
+    }
+    .card {
+      background: #fff; border: 1px solid #e1e6df; border-radius: 14px;
+      padding: 20px; margin-top: 16px; box-shadow: 0 2px 8px rgba(35,55,42,.05);
+    }
+    .drop-zone {
+      display: grid; place-items: center; min-height: 150px; text-align: center;
+      border: 2px dashed #a9c7b1; border-radius: 12px; color: #5e7566;
+      background: #f4faf5; padding: 18px; cursor: pointer;
+      transition: border-color .12s ease, background .12s ease;
+    }
+    .drop-zone.dragover { border-color: #4f9267; background: #eaf6ec; }
+    .drop-zone strong { display: block; color: #315d46; font-size: 1.03em; }
+    .drop-zone span { display: block; font-size: .8em; margin-top: 5px; }
+    #fileInput { position: absolute; inline-size: 1px; block-size: 1px; opacity: 0; }
+    .file-info {
+      display: none; margin-top: 10px; color: #4e6f5a; background: #edf6ef;
+      border-radius: 8px; padding: 8px 12px; font-size: .82em;
+    }
+    .file-info.show { display: block; }
+    .warning { color: #956618; background: #fff6df; }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+    .field { min-width: 0; }
+    .field.full { grid-column: 1 / -1; }
+    label.label { display: block; color: #587060; font-size: .78em; font-weight: bold; margin-bottom: 4px; }
+    input[type="text"], input[type="password"], textarea, select {
+      width: 100%; border: 1px solid #cfd9d1; border-radius: 8px; padding: 9px 11px;
+      color: #29352e; background: #fff; font: inherit;
+    }
+    textarea { min-height: 88px; resize: vertical; }
+    input:focus, textarea:focus, select:focus {
+      outline: 3px solid rgba(79,146,103,.18); border-color: #6fa47f;
+    }
+    .hint { color: #89948d; font-size: .72em; margin-top: 3px; }
+    .checks { display: flex; flex-wrap: wrap; gap: 8px 16px; padding-top: 7px; }
+    .checks label { font-size: .84em; color: #53675a; }
+    .preview-wrap { display: none; margin-top: 16px; }
+    .preview-wrap.show { display: block; }
+    .preview-note { color: #89948d; font-size: .74em; margin: 0 0 6px; }
+    #preview {
+      display: block; width: 100%; height: 480px; border: 1px solid #d9e0da;
+      border-radius: 10px; background: #fff;
+    }
+    .token-row { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: end; }
+    .token-help { font-size: .78em; margin-top: 10px; color: #718077; }
+    .token-help ol { margin: 6px 0; padding-left: 21px; }
+    button {
+      border: 1px solid #6b9b79; border-radius: 9px; padding: 9px 14px;
+      color: #315d46; background: #fff; font: inherit; font-weight: bold; cursor: pointer;
+    }
+    button:hover { background: #eff7f1; }
+    button.primary { color: #fff; background: #4f8f64; border-color: #4f8f64; }
+    button.primary:hover { background: #417b54; }
+    button:disabled { opacity: .5; cursor: not-allowed; }
+    .confirm {
+      display: flex; gap: 8px; align-items: flex-start; margin: 14px 0;
+      color: #53675a; font-size: .84em;
+    }
+    .overwrite {
+      display: none; color: #8a4f2d; background: #fff1e9; border: 1px solid #efc7ae;
+      border-radius: 8px; padding: 10px 12px; margin-top: 12px; font-size: .83em;
+    }
+    .overwrite.show { display: block; }
+    #status {
+      min-height: 46px; margin-top: 12px; border-radius: 9px; padding: 11px 13px;
+      background: #f1f4f1; color: #68746d; font-size: .82em; white-space: pre-wrap;
+    }
+    #status.working { color: #315d46; background: #edf6ef; }
+    #status.success { color: #245b38; background: #e5f5e9; }
+    #status.error { color: #8a332d; background: #fff0ee; }
+    .result-links { display: none; gap: 12px; flex-wrap: wrap; margin-top: 10px; font-size: .84em; }
+    .result-links.show { display: flex; }
+    @media (max-width: 640px) {
+      .grid { grid-template-columns: 1fr; }
+      .field.full { grid-column: auto; }
+      .token-row { grid-template-columns: 1fr; }
+      #preview { height: 420px; }
+    }
+  </style>
+</head>
+<body>
+  <a class="back" href="games.html">← ゲーム一覧へ</a>
+  <h1>🎮 ゲーム登録</h1>
+  <p class="lead">HTML一枚のゲームを、一覧情報と一緒にGitHub Pagesへ公開します。</p>
+
+  <div class="notice">
+    この画面は管理用です。GitHubトークンは登録処理中のメモリだけで使い、保存しません。
+    ゲームと一覧データは同じコミットで反映され、途中状態では公開されません。
+  </div>
+
+  <section class="card">
+    <h2>1. ゲームHTML</h2>
+    <label class="drop-zone" id="dropZone" for="fileInput">
+      <span aria-hidden="true" style="font-size:2em">📄</span>
+      <strong>HTMLをここへドロップ</strong>
+      <span>またはクリックして選択（最大5MB）</span>
+    </label>
+    <input id="fileInput" type="file" accept=".html,text/html">
+    <div id="fileInfo" class="file-info"></div>
+    <div id="dependencyWarning" class="file-info warning"></div>
+
+    <div id="previewWrap" class="preview-wrap">
+      <p class="preview-note">安全のため、プレビューは保存領域へアクセスできない隔離状態で表示します。</p>
+      <iframe
+        id="preview"
+        title="アップロードするゲームのプレビュー"
+        sandbox="allow-scripts allow-forms allow-modals allow-pointer-lock"
+        allow="fullscreen"
+      ></iframe>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>2. 一覧に表示する情報</h2>
+    <div class="grid">
+      <div class="field">
+        <label class="label" for="title">タイトル *</label>
+        <input id="title" type="text" maxlength="80" required>
+      </div>
+      <div class="field">
+        <label class="label" for="gameId">ゲームID *</label>
+        <input id="gameId" type="text" maxlength="80" pattern="[a-z0-9]+(?:-[a-z0-9]+)*" required>
+        <div class="hint">半角小文字・数字・ハイフン。公開URLになります。</div>
+      </div>
+      <div class="field full">
+        <label class="label" for="description">紹介文 *</label>
+        <textarea id="description" maxlength="180" required></textarea>
+      </div>
+      <div class="field">
+        <label class="label" for="genre">ジャンル</label>
+        <input id="genre" type="text" maxlength="30" placeholder="アクション">
+      </div>
+      <div class="field">
+        <label class="label" for="duration">プレイ時間</label>
+        <input id="duration" type="text" maxlength="24" placeholder="約20秒">
+      </div>
+      <div class="field">
+        <label class="label" for="icon">アイコン</label>
+        <input id="icon" type="text" maxlength="8" value="🎮">
+      </div>
+      <div class="field">
+        <span class="label">対応端末</span>
+        <div class="checks">
+          <label><input id="devicePc" type="checkbox" checked> PC</label>
+          <label><input id="deviceMobile" type="checkbox" checked> スマホ</label>
+        </div>
+      </div>
+    </div>
+    <div id="overwriteBox" class="overwrite">
+      <label><input id="overwrite" type="checkbox"> 同じIDのゲーム本体と一覧情報を更新する</label>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>3. GitHubへ登録</h2>
+    <div class="token-row">
+      <div class="field">
+        <label class="label" for="token">Fine-grained personal access token *</label>
+        <input
+          id="token"
+          type="password"
+          autocomplete="new-password"
+          spellcheck="false"
+          placeholder="github_pat_..."
+        >
+      </div>
+      <button id="toggleToken" type="button">表示</button>
+    </div>
+    <div class="token-help">
+      <a
+        href="https://github.com/settings/personal-access-tokens/new?name=AI+Story+Game+Uploader&amp;description=HTML+game+uploader+for+ai-serial-story&amp;target_name=asapi-1999&amp;expires_in=30&amp;contents=write"
+        target="_blank"
+        rel="noopener noreferrer"
+      >登録専用トークンを作る</a>
+      <ol>
+        <li>Repository accessで「Only select repositories」を選ぶ</li>
+        <li><code>ai-serial-story</code>だけを選ぶ</li>
+        <li>ContentsがRead and writeになっていることを確認する</li>
+      </ol>
+    </div>
+    <label class="confirm">
+      <input id="confirm" type="checkbox">
+      <span>ゲームHTMLにAPIキーなどの秘密情報が含まれていないことを確認しました。</span>
+    </label>
+    <button id="publish" class="primary" type="button">GitHubへ登録して公開</button>
+    <div id="status" role="status" aria-live="polite">HTMLを選択してください。</div>
+    <div id="resultLinks" class="result-links">
+      <a id="gameLink" target="_blank" rel="noopener noreferrer">公開ゲームを開く</a>
+      <a id="commitLink" target="_blank" rel="noopener noreferrer">GitHubのコミットを開く</a>
+    </div>
+  </section>
+
+  <script>
+    'use strict';
+
+    var OWNER = 'asapi-1999';
+    var REPO = 'ai-serial-story';
+    var BRANCH = 'main';
+    var API_VERSION = '2026-03-10';
+    var MAX_FILE_SIZE = 5 * 1024 * 1024;
+    var SITE_ROOT = 'https://' + OWNER + '.github.io/' + REPO + '/';
+
+    var fileInput = document.getElementById('fileInput');
+    var dropZone = document.getElementById('dropZone');
+    var fileInfo = document.getElementById('fileInfo');
+    var dependencyWarning = document.getElementById('dependencyWarning');
+    var previewWrap = document.getElementById('previewWrap');
+    var preview = document.getElementById('preview');
+    var titleInput = document.getElementById('title');
+    var idInput = document.getElementById('gameId');
+    var descriptionInput = document.getElementById('description');
+    var genreInput = document.getElementById('genre');
+    var durationInput = document.getElementById('duration');
+    var iconInput = document.getElementById('icon');
+    var overwriteBox = document.getElementById('overwriteBox');
+    var overwriteInput = document.getElementById('overwrite');
+    var tokenInput = document.getElementById('token');
+    var toggleToken = document.getElementById('toggleToken');
+    var confirmInput = document.getElementById('confirm');
+    var publishButton = document.getElementById('publish');
+    var statusBox = document.getElementById('status');
+    var resultLinks = document.getElementById('resultLinks');
+    var gameLink = document.getElementById('gameLink');
+    var commitLink = document.getElementById('commitLink');
+
+    var selectedFile = null;
+    var selectedHtml = '';
+    var previewUrl = '';
+    var knownGames = [];
+    var publishing = false;
+
+    function setStatus(message, type) {
+      statusBox.textContent = message;
+      statusBox.className = type || '';
+    }
+
+    function formatBytes(bytes) {
+      if (bytes < 1024) return bytes + ' B';
+      if (bytes < 1024 * 1024) return Math.round(bytes / 1024) + ' KB';
+      return (bytes / 1024 / 1024).toFixed(1) + ' MB';
+    }
+
+    function makeFallbackId() {
+      var now = new Date();
+      function two(value) { return String(value).padStart(2, '0'); }
+      return 'game-' + now.getFullYear()
+        + two(now.getMonth() + 1)
+        + two(now.getDate())
+        + '-' + two(now.getHours())
+        + two(now.getMinutes());
+    }
+
+    function slugFromFilename(filename) {
+      var base = filename.replace(/\.html?$/i, '').toLowerCase();
+      var slug = base
+        .replace(/[_\s]+/g, '-')
+        .replace(/[^a-z0-9-]/g, '')
+        .replace(/-+/g, '-')
+        .replace(/^-|-$/g, '');
+      return slug || makeFallbackId();
+    }
+
+    function isValidId(value) {
+      return /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(value);
+    }
+
+    function parseHtmlInfo(html) {
+      var documentValue = new DOMParser().parseFromString(html, 'text/html');
+      var external = [];
+      documentValue.querySelectorAll('script[src], link[href], img[src], audio[src], video[src], source[src]').forEach(function (element) {
+        var value = element.getAttribute('src') || element.getAttribute('href') || '';
+        if (value && !/^(data:|blob:|#)/i.test(value)) external.push(value);
+      });
+      return {
+        title: (documentValue.querySelector('title') || {}).textContent || '',
+        external: external
+      };
+    }
+
+    function updateExistingState() {
+      var id = idInput.value.trim();
+      var exists = knownGames.some(function (game) { return game.id === id; });
+      overwriteBox.classList.toggle('show', exists);
+      if (!exists) overwriteInput.checked = false;
+    }
+
+    function updateReadyState() {
+      if (publishing) return;
+      var ready = selectedFile
+        && selectedHtml
+        && titleInput.value.trim()
+        && descriptionInput.value.trim()
+        && isValidId(idInput.value.trim())
+        && tokenInput.value.trim()
+        && confirmInput.checked;
+      publishButton.disabled = !ready;
+    }
+
+    function showPreview(html) {
+      if (previewUrl) URL.revokeObjectURL(previewUrl);
+      previewUrl = URL.createObjectURL(new Blob([html], { type: 'text/html;charset=utf-8' }));
+      preview.src = previewUrl;
+      previewWrap.classList.add('show');
+    }
+
+    async function selectFile(file) {
+      resultLinks.classList.remove('show');
+      if (!file) return;
+      if (!/\.html?$/i.test(file.name)) {
+        selectedFile = null;
+        selectedHtml = '';
+        setStatus('HTMLファイルを選択してください。', 'error');
+        updateReadyState();
+        return;
+      }
+      if (file.size > MAX_FILE_SIZE) {
+        selectedFile = null;
+        selectedHtml = '';
+        setStatus('ファイルが5MBを超えています。', 'error');
+        updateReadyState();
+        return;
+      }
+
+      var html = await file.text();
+      if (!/<html[\s>]/i.test(html)) {
+        selectedFile = null;
+        selectedHtml = '';
+        setStatus('HTML文書として認識できませんでした。', 'error');
+        updateReadyState();
+        return;
+      }
+
+      selectedFile = file;
+      selectedHtml = html;
+      var info = parseHtmlInfo(html);
+      fileInfo.textContent = '選択中: ' + file.name + '（' + formatBytes(file.size) + '）';
+      fileInfo.classList.add('show');
+
+      if (info.external.length) {
+        dependencyWarning.textContent =
+          '外部ファイル参照が' + info.external.length + '件あります。単体HTMLとして公開できるか確認してください。';
+        dependencyWarning.classList.add('show');
+      } else {
+        dependencyWarning.textContent = '';
+        dependencyWarning.classList.remove('show');
+      }
+
+      if (!titleInput.value.trim()) titleInput.value = info.title.trim();
+      if (!idInput.value.trim()) idInput.value = slugFromFilename(file.name);
+      showPreview(html);
+      updateExistingState();
+      setStatus('一覧情報とGitHubトークンを入力してください。');
+      updateReadyState();
+    }
+
+    function decodeBase64Utf8(value) {
+      var binary = atob(value.replace(/\s/g, ''));
+      var bytes = new Uint8Array(binary.length);
+      for (var index = 0; index < binary.length; index += 1) {
+        bytes[index] = binary.charCodeAt(index);
+      }
+      return new TextDecoder().decode(bytes);
+    }
+
+    async function githubApi(path, options, token) {
+      var requestOptions = options || {};
+      var headers = {
+        'Accept': 'application/vnd.github+json',
+        'Authorization': 'Bearer ' + token,
+        'X-GitHub-Api-Version': API_VERSION
+      };
+      if (requestOptions.body) headers['Content-Type'] = 'application/json';
+      requestOptions.headers = headers;
+
+      var response = await fetch('https://api.github.com/repos/' + OWNER + '/' + REPO + path, requestOptions);
+      var data = null;
+      try { data = await response.json(); } catch (error) { data = null; }
+      if (!response.ok) {
+        var apiError = new Error((data && data.message) || ('GitHub API: HTTP ' + response.status));
+        apiError.status = response.status;
+        throw apiError;
+      }
+      return data;
+    }
+
+    function readDevices() {
+      var devices = [];
+      if (document.getElementById('devicePc').checked) devices.push('PC');
+      if (document.getElementById('deviceMobile').checked) devices.push('スマホ');
+      return devices;
+    }
+
+    function buildGameData(id, previous) {
+      var today = new Date().toISOString().slice(0, 10);
+      var game = Object.assign({}, previous || {}, {
+        id: id,
+        title: titleInput.value.trim(),
+        description: descriptionInput.value.trim(),
+        genre: genreInput.value.trim(),
+        devices: readDevices(),
+        duration: durationInput.value.trim(),
+        icon: iconInput.value.trim() || '🎮',
+        path: 'games/' + id + '/'
+      });
+      if (previous) game.updated = today;
+      else game.published = today;
+      return game;
+    }
+
+    async function publishGame() {
+      if (publishing) return;
+      updateReadyState();
+      if (publishButton.disabled) {
+        setStatus('未入力の項目があります。', 'error');
+        return;
+      }
+
+      var id = idInput.value.trim();
+      var gamePath = 'games/' + id + '/index.html';
+      var token = tokenInput.value.trim();
+      publishing = true;
+      publishButton.disabled = true;
+      resultLinks.classList.remove('show');
+
+      try {
+        setStatus('1/5 GitHubのmainブランチを確認しています…', 'working');
+        var ref = await githubApi('/git/ref/heads/' + BRANCH, {}, token);
+        var headSha = ref.object.sha;
+        var commit = await githubApi('/git/commits/' + headSha, {}, token);
+        var baseTreeSha = commit.tree.sha;
+
+        setStatus('2/5 最新のゲーム一覧を確認しています…', 'working');
+        var tree = await githubApi('/git/trees/' + baseTreeSha + '?recursive=1', {}, token);
+        if (tree.truncated) throw new Error('リポジトリ一覧が大きすぎるため、安全に更新できません。');
+
+        var catalogEntry = tree.tree.find(function (entry) {
+          return entry.path === 'games.json' && entry.type === 'blob';
+        });
+        if (!catalogEntry) throw new Error('GitHub上にgames.jsonが見つかりません。');
+
+        var catalogBlob = await githubApi('/git/blobs/' + catalogEntry.sha, {}, token);
+        var catalog = JSON.parse(decodeBase64Utf8(catalogBlob.content));
+        if (!Array.isArray(catalog)) throw new Error('GitHub上のgames.jsonが配列ではありません。');
+
+        var catalogIndex = catalog.findIndex(function (game) { return game.id === id; });
+        var fileExists = tree.tree.some(function (entry) { return entry.path === gamePath; });
+        var alreadyExists = catalogIndex >= 0 || fileExists;
+        if (alreadyExists && !overwriteInput.checked) {
+          knownGames = catalog;
+          updateExistingState();
+          throw new Error('同じゲームIDが存在します。更新する場合は確認欄にチェックしてください。');
+        }
+
+        var previous = catalogIndex >= 0 ? catalog[catalogIndex] : null;
+        var game = buildGameData(id, previous);
+        if (catalogIndex >= 0) catalog[catalogIndex] = game;
+        else catalog.push(game);
+
+        setStatus('3/5 ゲーム本体と一覧データをまとめています…', 'working');
+        var newTree = await githubApi('/git/trees', {
+          method: 'POST',
+          body: JSON.stringify({
+            base_tree: baseTreeSha,
+            tree: [
+              {
+                path: gamePath,
+                mode: '100644',
+                type: 'blob',
+                content: selectedHtml
+              },
+              {
+                path: 'games.json',
+                mode: '100644',
+                type: 'blob',
+                content: JSON.stringify(catalog, null, 2) + '\n'
+              }
+            ]
+          })
+        }, token);
+
+        setStatus('4/5 GitHubコミットを作成しています…', 'working');
+        var newCommit = await githubApi('/git/commits', {
+          method: 'POST',
+          body: JSON.stringify({
+            message: (previous ? 'ゲームを更新: ' : 'ゲームを追加: ') + game.title,
+            tree: newTree.sha,
+            parents: [headSha]
+          })
+        }, token);
+
+        setStatus('5/5 mainブランチへ反映しています…', 'working');
+        await githubApi('/git/refs/heads/' + BRANCH, {
+          method: 'PATCH',
+          body: JSON.stringify({ sha: newCommit.sha, force: false })
+        }, token);
+
+        knownGames = catalog;
+        updateExistingState();
+        gameLink.href = SITE_ROOT + game.path;
+        commitLink.href = 'https://github.com/' + OWNER + '/' + REPO + '/commit/' + newCommit.sha;
+        resultLinks.classList.add('show');
+        setStatus(
+          '公開登録が完了しました。GitHub Pagesへの反映には通常少し時間がかかります。\n'
+          + 'トークンはこの画面から消去しました。',
+          'success'
+        );
+      } catch (error) {
+        var message = error.message || String(error);
+        if (error.status === 401 || error.status === 403) {
+          message = 'GitHubの認証または権限を確認してください。'
+            + '対象リポジトリ限定・Contents: Read and writeのトークンが必要です。';
+        } else if (error.status === 409 || error.status === 422) {
+          message = 'ほかの更新と競合した可能性があります。ページを再読み込みして、もう一度登録してください。';
+        }
+        setStatus(message, 'error');
+      } finally {
+        tokenInput.value = '';
+        publishing = false;
+        updateReadyState();
+      }
+    }
+
+    dropZone.addEventListener('dragover', function (event) {
+      event.preventDefault();
+      dropZone.classList.add('dragover');
+    });
+    dropZone.addEventListener('dragleave', function () {
+      dropZone.classList.remove('dragover');
+    });
+    dropZone.addEventListener('drop', function (event) {
+      event.preventDefault();
+      dropZone.classList.remove('dragover');
+      selectFile(event.dataTransfer.files[0]).catch(function (error) {
+        setStatus(error.message, 'error');
+      });
+    });
+    fileInput.addEventListener('change', function () {
+      selectFile(fileInput.files[0]).catch(function (error) {
+        setStatus(error.message, 'error');
+      });
+    });
+
+    [titleInput, idInput, descriptionInput, genreInput, durationInput, iconInput, tokenInput, confirmInput]
+      .forEach(function (element) {
+        element.addEventListener('input', function () {
+          if (element === idInput) updateExistingState();
+          updateReadyState();
+        });
+        element.addEventListener('change', updateReadyState);
+      });
+
+    toggleToken.addEventListener('click', function () {
+      var showing = tokenInput.type === 'text';
+      tokenInput.type = showing ? 'password' : 'text';
+      toggleToken.textContent = showing ? '表示' : '隠す';
+    });
+    publishButton.addEventListener('click', publishGame);
+
+    window.addEventListener('beforeunload', function () {
+      if (previewUrl) URL.revokeObjectURL(previewUrl);
+    });
+
+    fetch('games.json', { cache: 'no-store' })
+      .then(function (response) {
+        if (!response.ok) throw new Error('games.json: HTTP ' + response.status);
+        return response.json();
+      })
+      .then(function (games) {
+        knownGames = Array.isArray(games) ? games : [];
+        updateExistingState();
+      })
+      .catch(function () {
+        knownGames = [];
+      });
+
+    updateReadyState();
+  </script>
+</body>
+</html>

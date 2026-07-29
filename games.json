@@ -1,0 +1,12 @@
+[
+  {
+    "id": "ikimono-biotop-adventure-20sec",
+    "title": "いきものビオトープ",
+    "description": "森と池をおさんぽして、いきものや木の実、水滴を集める20秒のミニゲーム。",
+    "genre": "アクション",
+    "devices": ["PC", "スマホ"],
+    "duration": "約20秒",
+    "icon": "🦦",
+    "path": "games/ikimono-biotop-adventure-20sec/"
+  }
+]
