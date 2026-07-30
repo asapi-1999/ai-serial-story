@@ -30,6 +30,8 @@ jobs:
 
       - name: Run Static Checks
         run: node tests/check_static.js
+      - name: Run Game Registration Tests
+        run: node tests/test_register_game.js
 
       - name: Verify Generation Base
         run: |

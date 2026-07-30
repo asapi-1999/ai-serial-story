@@ -191,14 +191,14 @@
     </div>
     <div class="token-help">
       <a
-        href="https://github.com/settings/personal-access-tokens/new?name=AI+Story+Game+Uploader&amp;description=HTML+game+uploader+for+ai-serial-story&amp;target_name=asapi-1999&amp;expires_in=30&amp;contents=write"
+        href="https://github.com/settings/personal-access-tokens/new?name=AI+Story+Game+Uploader&amp;description=HTML+game+uploader+for+ai-serial-story&amp;target_name=asapi-1999&amp;expires_in=30&amp;contents=write&amp;actions=read"
         target="_blank"
         rel="noopener noreferrer"
       >登録専用トークンを作る</a>
       <ol>
         <li>Repository accessで「Only select repositories」を選ぶ</li>
         <li><code>ai-serial-story</code>だけを選ぶ</li>
-        <li>ContentsがRead and writeになっていることを確認する</li>
+        <li>ContentsがRead and write、ActionsがRead-onlyになっていることを確認する</li>
       </ol>
     </div>
     <label class="confirm">
@@ -208,8 +208,9 @@
     <button id="publish" class="primary" type="button">GitHubへ登録して公開</button>
     <div id="status" role="status" aria-live="polite">HTMLを選択してください。</div>
     <div id="resultLinks" class="result-links">
-      <a id="gameLink" target="_blank" rel="noopener noreferrer">公開ゲームを開く</a>
-      <a id="commitLink" target="_blank" rel="noopener noreferrer">GitHubのコミットを開く</a>
+      <a id="gameLink" hidden target="_blank" rel="noopener noreferrer">公開ゲームを開く</a>
+      <a id="commitLink" hidden target="_blank" rel="noopener noreferrer">GitHubのコミットを開く</a>
+      <a id="validationLink" hidden target="_blank" rel="noopener noreferrer">検証結果を開く</a>
     </div>
   </section>
 
@@ -221,6 +222,8 @@
     var BRANCH = 'main';
     var API_VERSION = '2026-03-10';
     var MAX_FILE_SIZE = 5 * 1024 * 1024;
+    var VALIDATION_INTERVAL_MS = 10000;
+    var VALIDATION_TIMEOUT_MS = 10 * 60 * 1000;
     var SITE_ROOT = 'https://' + OWNER + '.github.io/' + REPO + '/';
 
     var fileInput = document.getElementById('fileInput');
@@ -245,11 +248,13 @@
     var resultLinks = document.getElementById('resultLinks');
     var gameLink = document.getElementById('gameLink');
     var commitLink = document.getElementById('commitLink');
+    var validationLink = document.getElementById('validationLink');
 
     var selectedFile = null;
     var selectedHtml = '';
     var previewUrl = '';
     var knownGames = [];
+    var knownFileIds = [];
     var publishing = false;
 
     function setStatus(message, type) {
@@ -296,13 +301,33 @@
       });
       return {
         title: (documentValue.querySelector('title') || {}).textContent || '',
-        external: external
+        external: external,
+        usesStorage: /\b(?:localStorage|sessionStorage|indexedDB)\b/.test(html)
       };
+    }
+
+    function validateClassicScripts(html) {
+      var documentValue = new DOMParser().parseFromString(html, 'text/html');
+      documentValue.querySelectorAll('script:not([src])').forEach(function (script) {
+        var type = (script.getAttribute('type') || '').trim().toLowerCase();
+        var isClassic = !type
+          || type === 'text/javascript'
+          || type === 'application/javascript'
+          || type === 'text/ecmascript'
+          || type === 'application/ecmascript';
+        if (!isClassic || !script.textContent.trim()) return;
+        try {
+          new Function(script.textContent);
+        } catch (error) {
+          throw new Error('インラインJavaScriptに構文エラーがあります: ' + error.message);
+        }
+      });
     }
 
     function updateExistingState() {
       var id = idInput.value.trim();
-      var exists = knownGames.some(function (game) { return game.id === id; });
+      var exists = knownGames.some(function (game) { return game.id === id; })
+        || knownFileIds.indexOf(id) >= 0;
       overwriteBox.classList.toggle('show', exists);
       if (!exists) overwriteInput.checked = false;
     }
@@ -352,6 +377,15 @@
         updateReadyState();
         return;
       }
+      try {
+        validateClassicScripts(html);
+      } catch (error) {
+        selectedFile = null;
+        selectedHtml = '';
+        setStatus(error.message, 'error');
+        updateReadyState();
+        return;
+      }
 
       selectedFile = file;
       selectedHtml = html;
@@ -359,9 +393,19 @@
       fileInfo.textContent = '選択中: ' + file.name + '（' + formatBytes(file.size) + '）';
       fileInfo.classList.add('show');
 
+      var warnings = [];
       if (info.external.length) {
-        dependencyWarning.textContent =
-          '外部ファイル参照が' + info.external.length + '件あります。単体HTMLとして公開できるか確認してください。';
+        warnings.push(
+          '外部ファイル参照が' + info.external.length + '件あります。単体HTMLとして公開できるか確認してください。'
+        );
+      }
+      if (info.usesStorage) {
+        warnings.push(
+          'このHTMLはブラウザ保存領域を使用します。安全な隔離のため、プレビューでは保存領域を利用できません。'
+        );
+      }
+      if (warnings.length) {
+        dependencyWarning.textContent = warnings.join('\n');
         dependencyWarning.classList.add('show');
       } else {
         dependencyWarning.textContent = '';
@@ -413,8 +457,22 @@
       return devices;
     }
 
+    function todayInJapan() {
+      var parts = new Intl.DateTimeFormat('en-US', {
+        timeZone: 'Asia/Tokyo',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit'
+      }).formatToParts(new Date());
+      var values = {};
+      parts.forEach(function (part) {
+        if (part.type !== 'literal') values[part.type] = part.value;
+      });
+      return values.year + '-' + values.month + '-' + values.day;
+    }
+
     function buildGameData(id, previous) {
-      var today = new Date().toISOString().slice(0, 10);
+      var today = todayInJapan();
       var game = Object.assign({}, previous || {}, {
         id: id,
         title: titleInput.value.trim(),
@@ -430,6 +488,55 @@
       return game;
     }
 
+    function makeValidationBranch(id) {
+      var random = new Uint32Array(1);
+      crypto.getRandomValues(random);
+      return 'game-upload/' + id + '-' + Date.now().toString(36) + '-' + random[0].toString(36);
+    }
+
+    function wait(milliseconds) {
+      return new Promise(function (resolve) {
+        window.setTimeout(resolve, milliseconds);
+      });
+    }
+
+    async function waitForValidation(branchName, commitSha, token) {
+      var deadline = Date.now() + VALIDATION_TIMEOUT_MS;
+      while (Date.now() < deadline) {
+        var data = await githubApi(
+          '/actions/workflows/test.yml/runs?event=push&branch='
+            + encodeURIComponent(branchName) + '&per_page=10',
+          {},
+          token
+        );
+        var run = (data.workflow_runs || []).find(function (item) {
+          return item.head_sha === commitSha;
+        });
+        if (run && run.status === 'completed') {
+          if (run.conclusion !== 'success') {
+            var validationError = new Error(
+              '公開前テストが失敗しました。検証結果を確認し、HTMLを修正してください。'
+            );
+            validationError.validationUrl = run.html_url;
+            throw validationError;
+          }
+          return run;
+        }
+        await wait(VALIDATION_INTERVAL_MS);
+      }
+      throw new Error('公開前テストが10分以内に完了しませんでした。時間を置いてもう一度登録してください。');
+    }
+
+    async function deleteValidationBranch(branchName, token) {
+      if (!branchName) return true;
+      try {
+        await githubApi('/git/refs/heads/' + branchName, { method: 'DELETE' }, token);
+        return true;
+      } catch (error) {
+        return false;
+      }
+    }
+
     async function publishGame() {
       if (publishing) return;
       updateReadyState();
@@ -441,18 +548,23 @@
       var id = idInput.value.trim();
       var gamePath = 'games/' + id + '/index.html';
       var token = tokenInput.value.trim();
+      var validationBranch = '';
+      var validationBranchCreated = false;
       publishing = true;
       publishButton.disabled = true;
       resultLinks.classList.remove('show');
+      gameLink.hidden = true;
+      commitLink.hidden = true;
+      validationLink.hidden = true;
 
       try {
-        setStatus('1/5 GitHubのmainブランチを確認しています…', 'working');
+        setStatus('1/7 GitHubのmainブランチを確認しています…', 'working');
         var ref = await githubApi('/git/ref/heads/' + BRANCH, {}, token);
         var headSha = ref.object.sha;
         var commit = await githubApi('/git/commits/' + headSha, {}, token);
         var baseTreeSha = commit.tree.sha;
 
-        setStatus('2/5 最新のゲーム一覧を確認しています…', 'working');
+        setStatus('2/7 最新のゲーム一覧を確認しています…', 'working');
         var tree = await githubApi('/git/trees/' + baseTreeSha + '?recursive=1', {}, token);
         if (tree.truncated) throw new Error('リポジトリ一覧が大きすぎるため、安全に更新できません。');
 
@@ -467,6 +579,7 @@
 
         var catalogIndex = catalog.findIndex(function (game) { return game.id === id; });
         var fileExists = tree.tree.some(function (entry) { return entry.path === gamePath; });
+        if (fileExists && knownFileIds.indexOf(id) < 0) knownFileIds.push(id);
         var alreadyExists = catalogIndex >= 0 || fileExists;
         if (alreadyExists && !overwriteInput.checked) {
           knownGames = catalog;
@@ -479,7 +592,18 @@
         if (catalogIndex >= 0) catalog[catalogIndex] = game;
         else catalog.push(game);
 
-        setStatus('3/5 ゲーム本体と一覧データをまとめています…', 'working');
+        validationBranch = makeValidationBranch(id);
+        setStatus('3/7 公開前テスト用の一時ブランチを準備しています…', 'working');
+        await githubApi('/git/refs', {
+          method: 'POST',
+          body: JSON.stringify({
+            ref: 'refs/heads/' + validationBranch,
+            sha: headSha
+          })
+        }, token);
+        validationBranchCreated = true;
+
+        setStatus('4/7 ゲーム本体と一覧データをまとめています…', 'working');
         var newTree = await githubApi('/git/trees', {
           method: 'POST',
           body: JSON.stringify({
@@ -501,7 +625,6 @@
           })
         }, token);
 
-        setStatus('4/5 GitHubコミットを作成しています…', 'working');
         var newCommit = await githubApi('/git/commits', {
           method: 'POST',
           body: JSON.stringify({
@@ -511,29 +634,54 @@
           })
         }, token);
 
-        setStatus('5/5 mainブランチへ反映しています…', 'working');
+        await githubApi('/git/refs/heads/' + validationBranch, {
+          method: 'PATCH',
+          body: JSON.stringify({ sha: newCommit.sha, force: false })
+        }, token);
+
+        setStatus('5/7 公開前テストの完了を待っています…', 'working');
+        var validationRun = await waitForValidation(validationBranch, newCommit.sha, token);
+        validationLink.href = validationRun.html_url;
+        validationLink.hidden = false;
+
+        setStatus('6/7 テスト済みコミットをmainブランチへ反映しています…', 'working');
         await githubApi('/git/refs/heads/' + BRANCH, {
           method: 'PATCH',
           body: JSON.stringify({ sha: newCommit.sha, force: false })
         }, token);
 
+        setStatus('7/7 一時ブランチを片付けています…', 'working');
+        var branchDeleted = await deleteValidationBranch(validationBranch, token);
+        validationBranch = '';
+        validationBranchCreated = false;
         knownGames = catalog;
         updateExistingState();
-        gameLink.href = SITE_ROOT + game.path;
+        gameLink.href = SITE_ROOT + 'play.html?id=' + encodeURIComponent(game.id);
         commitLink.href = 'https://github.com/' + OWNER + '/' + REPO + '/commit/' + newCommit.sha;
+        gameLink.hidden = false;
+        commitLink.hidden = false;
         resultLinks.classList.add('show');
         setStatus(
           '公開登録が完了しました。GitHub Pagesへの反映には通常少し時間がかかります。\n'
-          + 'トークンはこの画面から消去しました。',
+          + 'トークンはこの画面から消去しました。'
+          + (branchDeleted ? '' : '\n一時ブランチを削除できなかったため、GitHub上で確認してください。'),
           'success'
         );
       } catch (error) {
+        if (validationBranchCreated) {
+          await deleteValidationBranch(validationBranch, token);
+        }
         var message = error.message || String(error);
         if (error.status === 401 || error.status === 403) {
           message = 'GitHubの認証または権限を確認してください。'
-            + '対象リポジトリ限定・Contents: Read and writeのトークンが必要です。';
+            + '対象リポジトリ限定・Contents: Read and write・Actions: Read-onlyのトークンが必要です。';
         } else if (error.status === 409 || error.status === 422) {
           message = 'ほかの更新と競合した可能性があります。ページを再読み込みして、もう一度登録してください。';
+        }
+        if (error.validationUrl) {
+          validationLink.href = error.validationUrl;
+          validationLink.hidden = false;
+          resultLinks.classList.add('show');
         }
         setStatus(message, 'error');
       } finally {

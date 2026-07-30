@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+      - 'game-upload/**'
   pull_request:
 
 permissions:
@@ -18,3 +19,5 @@ jobs:
         run: python3 -m unittest discover -s tests
       - name: Run Static Checks
         run: node tests/check_static.js
+      - name: Run Game Registration Tests
+        run: node tests/test_register_game.js

@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>ゲーム一覧 | AI連載物語</title>
+  <title>ゲーム広場 | AI連載物語</title>
   <style>
     body {
       font-family: 'Hiragino Sans', 'Noto Sans JP', sans-serif;
@@ -17,10 +17,14 @@
     header.home { text-align: center; margin-bottom: 30px; }
     header.home h1 { font-size: 1.8em; color: #315d46; margin: 0 0 6px; }
     .tagline { color: #799585; font-size: 0.85em; margin: 0; }
-    .site-nav { display: flex; justify-content: center; gap: 8px; margin-top: 18px; }
+    .site-nav {
+      display: grid; grid-template-columns: repeat(2, minmax(0, 112px));
+      justify-content: center; gap: 8px; margin-top: 18px;
+    }
     .site-nav a {
       color: #526d5e; text-decoration: none; font-size: 0.88em; font-weight: bold;
-      padding: 7px 14px; border: 1px solid #cdddcf; border-radius: 999px; background: #fff;
+      padding: 7px 12px; border: 1px solid #cdddcf; border-radius: 999px; background: #fff;
+      text-align: center; box-sizing: border-box;
     }
     .site-nav a[aria-current="page"] { color: #fff; border-color: #5f9272; background: #5f9272; }
     .site-nav a:hover { border-color: #5f9272; }
@@ -59,7 +63,7 @@
 </head>
 <body>
   <header class="home">
-    <h1>🎮 ゲーム</h1>
+    <h1>🎮 ゲーム広場</h1>
     <p class="tagline">短い時間で遊べる、HTMLミニゲーム置き場</p>
     <nav class="site-nav" aria-label="コンテンツ">
       <a href="index.html">📚 小説</a>
@@ -84,7 +88,7 @@
     function makeGameCard(game) {
       var card = document.createElement('a');
       card.className = 'game-card';
-      card.href = game.path;
+      card.href = 'play.html?id=' + encodeURIComponent(game.id);
       card.setAttribute('aria-label', game.title + 'を遊ぶ');
 
       var icon = document.createElement('div');

@@ -19,19 +19,34 @@ GitHub Actions (毎週月曜)
 index.html … 本棚（作品一覧）。連載中・完結作品をカードで並べる
 work.html  … 作品ビューア。?work=N で作品を1つ表示（全話＋ルビ描画）
 games.html … HTMLミニゲームの一覧。games.json からカードを描画する
+play.html  … 戻る操作を表示し、選択したゲーム本体を読み込むプレイヤー画面
 games/     … ゲーム本体。ゲームごとに1つのフォルダと index.html を置く
 ```
 
 ### ゲームの掲載
 
 HTML一枚で完結するゲームを `games/<ゲームID>/index.html` に置き、`games.json` に
-タイトル・紹介文・ジャンル・対応端末などを追加すると、ゲーム一覧にカードが表示されます。
-ゲームIDには半角小文字・数字・ハイフンを使用します。ゲーム本体は一覧から直接開きます。
+タイトル・紹介文・ジャンル・対応端末などを追加すると、ゲーム広場にカードが表示されます。
+ゲームIDには半角小文字・数字・ハイフンを使用します。カードからは共通のプレイヤー画面を介して
+ゲーム本体を開くため、ゲームHTMLを変更しなくてもゲーム広場へ戻れます。
 
 `game-admin.html` では、HTMLのドラッグ＆ドロップ、一覧情報の入力、プレビュー、GitHubへの
-公開登録までブラウザ上で行えます。登録には、このリポジトリだけに `Contents: Read and write`
-を許可したFine-grained personal access tokenを使用します。トークンはブラウザに保存しません。
-ゲーム本体と `games.json` は1つのGitコミットとして同時に反映され、強制更新は行いません。
+公開登録までブラウザ上で行えます。登録には、このリポジトリだけに `Contents: Read and write` と
+`Actions: Read-only` を許可したFine-grained personal access tokenを使用します。トークンは
+ブラウザに保存しません。ゲーム本体と `games.json` は一時ブランチでテストに合格した後、
+1つのGitコミットとして同時に反映され、強制更新は行いません。
+
+普段の登録は、既存のGit認証を使うローカル登録コマンドでも行えます。
+
+```powershell
+node tools/register-game.js .\game.html
+```
+
+タイトルなどの入力、ローカルプレビュー、構文検査、`games.json` の更新、テスト、
+コミット、`origin/main` へのpushを順番に行います。WindowsではHTMLファイルを
+`register-game-drop.cmd` へドラッグ＆ドロップして起動することもできます。
+ファイル更新とテストだけを行う場合は `--prepare-only`、プレビューを省略する場合は
+`--skip-preview` を指定します。Pythonが利用できる環境ではPythonテストも実行します。
 
 ゲーム関連ファイルは `generate.py` の入力・出力対象外です。月曜の小説生成ワークフローも
 小説用JSONとRSSだけをコミットするため、通常のゲーム登録は連載内容に影響しません。両者が
@@ -83,7 +98,8 @@ HTML一枚で完結するゲームを `games/<ゲームID>/index.html` に置き
 - **手動**: Actions タブ → 該当ワークフロー → **Run workflow**（`workflow_dispatch`）。
 - スケジュールと手動が重なっても `concurrency` で直列化されます。
 - 生成中に `main` が更新された場合、古い状態からの生成結果はコミットせず安全に終了します。
-- **テスト**: `python3 -m unittest discover -s tests` と `node tests/check_static.js`
+- **テスト**: `python3 -m unittest discover -s tests`、`node tests/check_static.js`、
+  `node tests/test_register_game.js`
 
 ## 設定の調整箇所
 

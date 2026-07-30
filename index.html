@@ -19,10 +19,14 @@
     header.home h1 { font-size: 1.8em; color: #5a3e1b; margin: 0 0 6px; }
     .tagline { color: #c8a96e; font-size: 0.85em; margin: 0; }
     .rss { font-size: 0.8em; color: #c8a96e; text-decoration: none; margin-left: 6px; }
-    .site-nav { display: flex; justify-content: center; gap: 8px; margin-top: 18px; }
+    .site-nav {
+      display: grid; grid-template-columns: repeat(2, minmax(0, 112px));
+      justify-content: center; gap: 8px; margin-top: 18px;
+    }
     .site-nav a {
       color: #7b6545; text-decoration: none; font-size: 0.88em; font-weight: bold;
-      padding: 7px 14px; border: 1px solid #e3d5bd; border-radius: 999px; background: #fff;
+      padding: 7px 12px; border: 1px solid #e3d5bd; border-radius: 999px; background: #fff;
+      text-align: center; box-sizing: border-box;
     }
     .site-nav a[aria-current="page"] { color: #fff; border-color: #c8a96e; background: #c8a96e; }
     .site-nav a:hover { border-color: #c8a96e; }
